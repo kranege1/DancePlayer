@@ -1806,11 +1806,11 @@ function App() {
 
       <nav className="tab-bar" role="tablist" aria-label="Main navigation">
         {([
-          { id: 'songs',     label: 'Songs',     icon: '♫' },
-          { id: 'playlists', label: 'Playlists', icon: '☰' },
-          { id: 'player',    label: 'Player',    icon: '▶' },
-          { id: 'export',    label: 'Export',    icon: '⬆' },
-        ] as const).map(({ id, label, icon }) => (
+          { id: 'songs',     label: 'Songs',     icon: '♫',  badge: null },
+          { id: 'playlists', label: 'Playlists', icon: '☰',  badge: dancePlaylists.reduce((n, dp) => n + dp.entries.length, 0) || null },
+          { id: 'player',    label: 'Player',    icon: '▶',  badge: playlist.entries.filter((e) => e.type === 'track').length || null },
+          { id: 'export',    label: 'Export',    icon: '⬆',  badge: null },
+        ] as const).map(({ id, label, icon, badge }) => (
           <button
             key={id}
             type="button"
@@ -1819,7 +1819,10 @@ function App() {
             className={`tab-btn${activeTab === id ? ' active' : ''}`}
             onClick={() => setActiveTab(id)}
           >
-            <span className="tab-icon" aria-hidden="true">{icon}</span>
+            <span className="tab-icon-wrap">
+              <span className="tab-icon" aria-hidden="true">{icon}</span>
+              {badge !== null && <span className="tab-badge">{badge > 99 ? '99+' : badge}</span>}
+            </span>
             <span className="tab-label">{label}</span>
           </button>
         ))}
