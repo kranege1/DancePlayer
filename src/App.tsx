@@ -721,47 +721,79 @@ function App() {
     setActiveEntryId(entry.id)
 
     if (entry.type === 'break') {
+      // ── Stop any currently playing audio ───────────────────────────
+      const mainAudio = audioRef.current
+      if (mainAudio && !mainAudio.paused) {
+        mainAudio.pause()
+      }
+      // Stop preview audio too
+      if (!previewAudioRef.current.paused) {
+        previewAudioRef.current.pause()
+        setPreviewingTrackId(null)
+        if (previewObjectUrlRef.current) {
+          URL.revokeObjectURL(previewObjectUrlRef.current)
+          previewObjectUrlRef.current = null
+        }
+      }
+
       const dur = entry.breakItem.durationSec
       setBreakSecondsLeft(dur)
       setStatus(`Break: ${dur}s (${entry.breakItem.mode})`)
 
       // ── Applause synthesis ──────────────────────────────────────────
       if (entry.breakItem.mode === 'applause') {
-        const tryApplause = (startAt: number, endAt: number) => {
+        // Each burst gets its own fresh AudioContext started immediately,
+        // avoiding iOS suspend issues with long-delayed ctx.start() calls.
+        const playApplauseBurst = (burstSec: number) => {
           try {
             const ctx = new AudioContext()
-            const totalSec = endAt - startAt
-            const bufferSize = Math.ceil(ctx.sampleRate * totalSec)
-            const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate)
-            const data = buffer.getChannelData(0)
-            // noise envelope: fade-in 1s, sustain, fade-out 1s
-            const fadeIn = Math.min(ctx.sampleRate, bufferSize)
-            const fadeOut = Math.min(ctx.sampleRate, bufferSize)
-            for (let i = 0; i < bufferSize; i++) {
-              const env = i < fadeIn
-                ? i / fadeIn
-                : i > bufferSize - fadeOut
-                  ? (bufferSize - i) / fadeOut
-                  : 1
-              data[i] = (Math.random() * 2 - 1) * env * 0.35
+            void ctx.resume()
+            const sr = ctx.sampleRate
+            const bufSize = Math.ceil(sr * burstSec)
+            const buf = ctx.createBuffer(2, bufSize, sr)
+            // Two channels with independent noise for a wider crowd feel
+            for (let ch = 0; ch < 2; ch++) {
+              const data = buf.getChannelData(ch)
+              const fadeS = Math.min(sr * 0.8, bufSize)
+              for (let i = 0; i < bufSize; i++) {
+                const env = i < fadeS
+                  ? i / fadeS
+                  : i > bufSize - fadeS
+                    ? (bufSize - i) / fadeS
+                    : 1
+                data[i] = (Math.random() * 2 - 1) * env * 0.4
+              }
             }
             const src = ctx.createBufferSource()
-            src.buffer = buffer
-            // band-pass filter to make it sound more like clapping
-            const bp = ctx.createBiquadFilter()
-            bp.type = 'bandpass'
-            bp.frequency.value = 1800
-            bp.Q.value = 0.6
-            src.connect(bp)
-            bp.connect(ctx.destination)
-            src.start(ctx.currentTime + startAt)
-            src.stop(ctx.currentTime + endAt)
+            src.buffer = buf
+            // Two cascaded bandpass filters: clap body ~1800Hz, presence ~3500Hz
+            const bp1 = ctx.createBiquadFilter()
+            bp1.type = 'bandpass'
+            bp1.frequency.value = 1800
+            bp1.Q.value = 0.5
+            const bp2 = ctx.createBiquadFilter()
+            bp2.type = 'bandpass'
+            bp2.frequency.value = 3500
+            bp2.Q.value = 0.8
+            const gain = ctx.createGain()
+            gain.gain.value = 1.2
+            src.connect(bp1)
+            src.connect(bp2)
+            bp1.connect(gain)
+            bp2.connect(gain)
+            gain.connect(ctx.destination)
+            src.start()
             src.onended = () => void ctx.close()
-          } catch { /* AudioContext may be blocked before user gesture */ }
+          } catch { /* AudioContext blocked before user gesture */ }
         }
-        // applause burst at start and end, silence in the middle
-        tryApplause(0, Math.min(4, dur * 0.25))
-        if (dur > 10) tryApplause(Math.max(0, dur - 4), dur)
+
+        const burstLen = Math.min(5, dur * 0.3)
+        playApplauseBurst(burstLen) // burst at break start
+        if (dur > 10) {
+          // Schedule end burst via setTimeout so a fresh context is created
+          // close to play time (avoids iOS auto-suspend of long-idle contexts)
+          window.setTimeout(() => playApplauseBurst(burstLen), Math.max(0, dur - burstLen) * 1000)
+        }
       }
 
       // ── Countdown speech ────────────────────────────────────────────
