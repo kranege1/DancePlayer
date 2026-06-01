@@ -1440,7 +1440,22 @@ function App() {
 
           <audio ref={audioRef} controls className="audio-player" />
 
-          {/* Cue / end progress bar (timed mode) */}
+          {/* Now-playing strip */}
+          {currentTrack ? (
+            <div className="now-playing-strip">
+              <div className="now-playing-info">
+                <span className="now-playing-title">{cleanDisplayTitle(currentTrack.title)}</span>
+                {currentTrack.artist && <span className="now-playing-artist">{currentTrack.artist}</span>}
+              </div>
+              <span className="dance-badge now-playing-badge" style={{ background: DANCE_COLORS[currentTrack.danceType] }}>
+                {currentTrack.danceType}
+              </span>
+            </div>
+          ) : (
+            <div className="now-playing-strip now-playing-empty">No track playing</div>
+          )}
+
+
           {currentTrack && settings.wdsfTimedMode && (() => {
             const dur = currentTrack.durationSec || 1
             const cuePos = (currentTrack.cueStartSec / dur) * 100
