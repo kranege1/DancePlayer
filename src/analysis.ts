@@ -9,6 +9,8 @@ export interface RhythmAnalysisHints {
   title?: string
   artist?: string
   fileName?: string
+  /** Genre / tag strings from an external lookup (e.g. MusicBrainz) */
+  genres?: string[]
 }
 
 interface DanceScore {
@@ -122,7 +124,16 @@ function mergeDanceScores(...scoreSets: DanceScore[][]): { danceType: DanceType;
 
 export function inferDanceFromHints(hints: RhythmAnalysisHints): { danceType: DanceType; confidence: number } {
   const textHints = [hints.title, hints.artist, hints.fileName].filter(Boolean).join(' ')
-  return mergeDanceScores(scoreDanceFromText(textHints))
+  const scoreSets: DanceScore[][] = [scoreDanceFromText(textHints)]
+
+  // Genres from external lookup carry extra weight (1.5×) — they are authoritative labels
+  if (hints.genres?.length) {
+    const genreText = hints.genres.join(' ')
+    const genreScores = scoreDanceFromText(genreText).map((s) => ({ ...s, score: s.score * 1.5 }))
+    scoreSets.push(genreScores)
+  }
+
+  return mergeDanceScores(...scoreSets)
 }
 
 export async function analyzeTrackRhythm(file: File, hints: RhythmAnalysisHints = {}): Promise<RhythmAnalysisResult> {

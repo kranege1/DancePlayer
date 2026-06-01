@@ -15,6 +15,7 @@ import { parseVoiceIntent } from './voice'
 import { analyzeTrackRhythm } from './analysis'
 import { getAudioFile, saveAudioFile } from './mediaStore'
 import { getFadeWindow, getRepeatThirtyStart } from './playbackMath'
+import { lookupTrackOnMusicBrainz } from './musicbrainz'
 
 interface SpeechResultItem {
   transcript: string
@@ -254,19 +255,52 @@ function App() {
       URL.revokeObjectURL(temporaryUrl)
 
       const rawName = file.name.replace(/\.[^.]+$/, '')
-      const { title, artist } = extractArtistFromFilename(rawName)
-      const analysis = await analyzeTrackRhythm(file, {
+      const { title: parsedTitle, artist: parsedArtist } = extractArtistFromFilename(rawName)
+
+      // Step 1: quick local analysis from filename
+      const localAnalysis = await analyzeTrackRhythm(file, {
         title: rawName,
         fileName: file.name,
       })
-      const danceType = analysis.danceType
+
+      // Step 2: MusicBrainz web lookup (non-blocking, best-effort, only when online)
+      let finalTitle = parsedTitle
+      let finalArtist = parsedArtist
+      let finalDanceType = localAnalysis.danceType
+      let finalConfidence = localAnalysis.confidence
+
+      if (navigator.onLine && parsedArtist) {
+        setStatus(`Checking online metadata ${i + 1} of ${accepted.length}: ${parsedTitle}`)
+        const mbResult = await lookupTrackOnMusicBrainz(parsedArtist, parsedTitle)
+        if (mbResult && mbResult.matchConfidence >= 0.5) {
+          // Use canonical MB names only if MB is fairly confident
+          finalTitle = mbResult.title
+          finalArtist = mbResult.artist
+          // Re-run analysis enriched with MB genre tags
+          if (mbResult.genres.length > 0) {
+            const enrichedAnalysis = await analyzeTrackRhythm(file, {
+              title: mbResult.title,
+              artist: mbResult.artist,
+              fileName: file.name,
+              genres: mbResult.genres,
+            })
+            // Only upgrade dance type if the enriched run is more confident
+            if (enrichedAnalysis.confidence > localAnalysis.confidence) {
+              finalDanceType = enrichedAnalysis.danceType
+              finalConfidence = Math.min(0.98, enrichedAnalysis.confidence + 0.05) // small bonus for web-confirmed
+            }
+          }
+        }
+      }
+
+      const danceType = finalDanceType
 
       imported.push({
         id,
-        title,
-        artist,
+        title: finalTitle,
+        artist: finalArtist,
         danceType,
-        analysisConfidence: analysis.confidence,
+        analysisConfidence: finalConfidence,
         hasCachedAudio: true,
         qualityRating: 3,
         rhythmRating: 3,
