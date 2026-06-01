@@ -52,6 +52,7 @@ export interface SessionRule {
   danceType: DanceType
   autoBreakEnabled: boolean
   breakDurationSec: number
+  breakMode: 'silence' | 'countdown' | 'applause'
   announcementEnabled: boolean
 }
 

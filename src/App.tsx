@@ -4,7 +4,6 @@ import {
   DANCES,
   WDSF_2025_DEFAULT_PLAYTIMES,
   type AppSettings,
-  type BreakItem,
   type DanceType,
   type Playlist,
   type PlaylistEntry,
@@ -79,6 +78,7 @@ const initialSessionRule: SessionRule = {
   danceType: 'Tango',
   autoBreakEnabled: true,
   breakDurationSec: 50,
+  breakMode: 'countdown',
   announcementEnabled: true,
 }
 
@@ -158,8 +158,6 @@ function App() {
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set())
   const [libraryFilter, setLibraryFilter] = useState<DanceType | 'All'>('All')
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null)
-  const [manualBreakSec, setManualBreakSec] = useState(50)
-  const [manualBreakMode, setManualBreakMode] = useState<BreakItem['mode']>('countdown')
   const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>([])
   const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>([])
   const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('songs')
@@ -615,35 +613,66 @@ function App() {
     event.target.value = ''
   }
 
-  function addManualBreak() {
-    const makeBreak = (): BreakItem => ({
-      id: createId('break'),
-      mode: manualBreakMode,
-      durationSec: Math.max(5, Math.min(300, manualBreakSec)),
-      label: `Manual ${manualBreakMode} break`,
-    })
-    setPlaylist((prev) => {
-      const result: PlaylistEntry[] = []
-      for (let i = 0; i < prev.entries.length; i++) {
-        const entry = prev.entries[i]
-        if (entry.type === 'track') {
-          result.push(entry)
-          // replace existing adjacent break OR insert a new one
-          const next = prev.entries[i + 1]
-          if (next?.type === 'break') {
-            // overwrite it with the current settings
-            result.push({ ...next, breakItem: makeBreak() })
-            i++ // skip the old break
-          } else {
-            result.push({ id: createId('entry-break'), type: 'break', breakItem: makeBreak() })
+  // ── Run session break then advance to next entry ─────────────────────
+  function runBreakThenAdvance(nextIndex: number, rule: SessionRule) {
+    const dur = Math.max(5, Math.min(300, rule.breakDurationSec))
+    setBreakSecondsLeft(dur)
+    setStatus(`Break: ${dur}s (${rule.breakMode})`)
+
+    // Stop any running audio
+    const mainAudio = audioRef.current
+    if (mainAudio && !mainAudio.paused) mainAudio.pause()
+
+    // ── Applause ────────────────────────────────────────────────────
+    if (rule.breakMode === 'applause') {
+      const playApplauseBurst = (burstSec: number) => {
+        try {
+          const ctx = new AudioContext()
+          void ctx.resume()
+          const sr = ctx.sampleRate
+          const bufSize = Math.ceil(sr * burstSec)
+          const buf = ctx.createBuffer(2, bufSize, sr)
+          for (let ch = 0; ch < 2; ch++) {
+            const data = buf.getChannelData(ch)
+            const fadeS = Math.min(sr * 0.8, bufSize)
+            for (let i = 0; i < bufSize; i++) {
+              const env = i < fadeS ? i / fadeS : i > bufSize - fadeS ? (bufSize - i) / fadeS : 1
+              data[i] = (Math.random() * 2 - 1) * env * 0.4
+            }
           }
-        } else {
-          // a break not preceded by a track (e.g. at the start) — keep it
-          result.push(entry)
-        }
+          const src = ctx.createBufferSource()
+          src.buffer = buf
+          const bp1 = ctx.createBiquadFilter(); bp1.type = 'bandpass'; bp1.frequency.value = 1800; bp1.Q.value = 0.5
+          const bp2 = ctx.createBiquadFilter(); bp2.type = 'bandpass'; bp2.frequency.value = 3500; bp2.Q.value = 0.8
+          const gain = ctx.createGain(); gain.gain.value = 1.2
+          src.connect(bp1); src.connect(bp2); bp1.connect(gain); bp2.connect(gain); gain.connect(ctx.destination)
+          src.start()
+          src.onended = () => void ctx.close()
+        } catch { /* AudioContext blocked */ }
       }
-      return { ...prev, entries: result }
-    })
+      const burstLen = Math.min(5, dur * 0.3)
+      playApplauseBurst(burstLen)
+      if (dur > 10) window.setTimeout(() => playApplauseBurst(burstLen), Math.max(0, dur - burstLen) * 1000)
+    }
+
+    // ── Countdown ───────────────────────────────────────────────────
+    if (rule.breakMode === 'countdown') {
+      for (let t = dur; t >= 0; t -= 10) {
+        window.setTimeout(() => { if (t === 0 || t === 5 || t % 10 === 0) speak(String(t)) }, (dur - t) * 1000)
+      }
+    }
+
+    // ── Tick + advance ──────────────────────────────────────────────
+    const started = performance.now()
+    breakTickRef.current = window.setInterval(() => {
+      const left = Math.max(0, Math.ceil(dur - (performance.now() - started) / 1000))
+      setBreakSecondsLeft(left)
+    }, 500)
+    breakTimeoutRef.current = window.setTimeout(() => {
+      if (breakTickRef.current) { window.clearInterval(breakTickRef.current); breakTickRef.current = null }
+      setBreakSecondsLeft(null)
+      void playEntryByIndex(nextIndex)
+    }, dur * 1000)
   }
 
   function previewTrack(trackId: string) {
@@ -890,7 +919,11 @@ function App() {
           if (audio.currentTime >= fadeWindow.end) {
             audio.pause()
             audio.volume = 1
-            void playEntryByIndex(index + 1)
+            if (sessionRule.autoBreakEnabled) {
+              runBreakThenAdvance(index + 1, sessionRule)
+            } else {
+              void playEntryByIndex(index + 1)
+            }
             return
           }
           fadeFrameRef.current = requestAnimationFrame(tick)
@@ -901,7 +934,11 @@ function App() {
     }
 
     audio.onended = () => {
-      void playEntryByIndex(index + 1)
+      if (sessionRule.autoBreakEnabled) {
+        runBreakThenAdvance(index + 1, sessionRule)
+      } else {
+        void playEntryByIndex(index + 1)
+      }
     }
     void audio.play()
     setStatus(`Playing ${track.title} (${track.danceType})`)
@@ -1502,34 +1539,43 @@ function App() {
             </label>
           </div>
 
-          {/* Break inserter — in Player so you can drop a break into the live queue */}
-          <h3>Insert break</h3>
+          {/* Break between tracks — session-level setting, no playlist entries needed */}
+          <h3>Break between tracks</h3>
           <div className="row compact">
-            <label>
-              Duration (s)
+            <label className="check">
               <input
-                type="number"
-                min={5}
-                max={300}
-                value={manualBreakSec}
-                onChange={(e) => setManualBreakSec(Number(e.target.value))}
+                type="checkbox"
+                checked={sessionRule.autoBreakEnabled}
+                onChange={(e) => setSessionRule((prev) => ({ ...prev, autoBreakEnabled: e.target.checked }))}
               />
+              Enable break
             </label>
-            <label>
-              Mode
-              <select
-                value={manualBreakMode}
-                onChange={(e) => setManualBreakMode(e.target.value as BreakItem['mode'])}
-              >
-                <option value="silence">Silence</option>
-                <option value="countdown">Countdown</option>
-                <option value="applause">Applause</option>
-              </select>
-            </label>
-            <button type="button" onClick={addManualBreak}>
-              Add Break
-            </button>
           </div>
+          {sessionRule.autoBreakEnabled && (
+            <div className="row compact">
+              <label>
+                Duration (s)
+                <input
+                  type="number"
+                  min={5}
+                  max={300}
+                  value={sessionRule.breakDurationSec}
+                  onChange={(e) => setSessionRule((prev) => ({ ...prev, breakDurationSec: Math.max(5, Math.min(300, Number(e.target.value))) }))}
+                />
+              </label>
+              <label>
+                Mode
+                <select
+                  value={sessionRule.breakMode ?? 'countdown'}
+                  onChange={(e) => setSessionRule((prev) => ({ ...prev, breakMode: e.target.value as SessionRule['breakMode'] }))}
+                >
+                  <option value="silence">Silence</option>
+                  <option value="countdown">Countdown</option>
+                  <option value="applause">Applause</option>
+                </select>
+              </label>
+            </div>
+          )}
 
           <h3>Voice commands</h3>
           {!window.isSecureContext && (
