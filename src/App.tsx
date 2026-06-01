@@ -263,15 +263,31 @@ function App() {
       return
     }
 
-    setImportProgress({ done: 0, total: accepted.length })
+    // Skip files already in the library (match by filename without extension)
+    const existingNames = new Set(
+      tracks.map((t) => t.title.trim().toLowerCase())
+    )
+    const newFiles = accepted.filter((file) => {
+      const nameNoExt = file.name.replace(/\.[^.]+$/, '').trim().toLowerCase()
+      return !existingNames.has(nameNoExt)
+    })
+    const skippedCount = accepted.length - newFiles.length
+    if (!newFiles.length) {
+      setStatus(`All ${accepted.length} file(s) already imported.`)
+      event.target.value = ''
+      return
+    }
+    const filesToImport = newFiles
+
+    setImportProgress({ done: 0, total: filesToImport.length })
 
     const imported: Track[] = []
     const importedMap: Record<string, File | undefined> = {}
 
-    for (let i = 0; i < accepted.length; i++) {
-      const file = accepted[i]
-      setImportProgress({ done: i + 1, total: accepted.length })
-      setStatus(`Analysing ${i + 1} of ${accepted.length}: ${file.name.replace(/\.[^.]+$/, '')}`)
+    for (let i = 0; i < filesToImport.length; i++) {
+      const file = filesToImport[i]
+      setImportProgress({ done: i + 1, total: filesToImport.length })
+      setStatus(`Analysing ${i + 1} of ${filesToImport.length}: ${file.name.replace(/\.[^.]+$/, '')}`)
 
       const id = createId('track')
       const temporaryUrl = URL.createObjectURL(file)
@@ -300,7 +316,7 @@ function App() {
       let finalConfidence = localAnalysis.confidence
 
       if (navigator.onLine && parsedArtist) {
-        setStatus(`Checking online metadata ${i + 1} of ${accepted.length}: ${parsedTitle}`)
+        setStatus(`Checking online metadata ${i + 1} of ${filesToImport.length}: ${parsedTitle}`)
         const mbResult = await lookupTrackOnMusicBrainz(parsedArtist, parsedTitle)
         if (mbResult && mbResult.matchConfidence >= 0.5) {
           // Use canonical MB names only if MB is fairly confident
@@ -352,10 +368,11 @@ function App() {
     setFileMap((prev) => ({ ...prev, ...importedMap }))
     setImportProgress(null)
     const lowConfidenceCount = imported.filter((track) => isLowConfidenceTrack(track)).length
+    const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} already in library, skipped)` : ''
     setStatus(
       lowConfidenceCount > 0
-        ? `Imported ${imported.length} track(s). ${lowConfidenceCount} need review in the list.`
-        : `Imported ${imported.length} track(s). Dance type auto-detected from file names.`,
+        ? `Imported ${imported.length} track(s). ${lowConfidenceCount} need review in the list.${skippedSuffix}`
+        : `Imported ${imported.length} track(s). Dance type auto-detected from file names.${skippedSuffix}`,
     )
     event.target.value = ''
   }
@@ -1146,17 +1163,10 @@ function App() {
         {activeTab === 'songs' && (
         <section className="panel">
           <h2>Library</h2>
-          <div className="import-buttons">
-            <label className="file-label" htmlFor="music-files">
-              Import files
-            </label>
-            <label className="file-label folder-label" htmlFor="music-folder">
-              Import folder
-            </label>
-          </div>
+          <label className="file-label" htmlFor="music-files">
+            Import music
+          </label>
           <input id="music-files" type="file" multiple accept=".mp3,.wav,.aac,.m4a,.aiff" onChange={handleImport} />
-          {/* webkitdirectory picks a folder incl. all subfolders; no accept= needed as we filter in handler */}
-          <input id="music-folder" type="file" multiple onChange={handleImport} {...{ webkitdirectory: '', mozdirectory: '' } as React.InputHTMLAttributes<HTMLInputElement>} />
 
           {importProgress && (
             <div className="import-progress">
