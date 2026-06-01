@@ -395,6 +395,15 @@ function App() {
     })
   }
 
+  function selectHighConfidence() {
+    const ids = visibleTracks.filter((t) => !isLowConfidenceTrack(t)).map((t) => t.id)
+    setSelectedTrackIds((prev) => {
+      const next = new Set(prev)
+      ids.forEach((id) => next.add(id))
+      return next
+    })
+  }
+
   function clearSelection() {
     setSelectedTrackIds(new Set())
   }
@@ -1186,6 +1195,9 @@ function App() {
               </select>
               <button type="button" onClick={selectAllFiltered}>
                 Select all ({visibleTracks.length})
+              </button>
+              <button type="button" onClick={selectHighConfidence}>
+                High confidence ({visibleTracks.filter((t) => !isLowConfidenceTrack(t)).length})
               </button>
               {selectedTrackIds.size > 0 && (
                 <>
