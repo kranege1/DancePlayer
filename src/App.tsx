@@ -449,9 +449,8 @@ function App() {
   }
 
   function renameCurrentPlaylist(nextName: string) {
-    const trimmed = nextName.trim()
-    if (!trimmed) return
-    setPlaylist((prev) => ({ ...prev, name: trimmed }))
+    // Allow empty while typing — trim only matters at save time
+    setPlaylist((prev) => ({ ...prev, name: nextName }))
   }
 
   function createNewPlaylist() {
