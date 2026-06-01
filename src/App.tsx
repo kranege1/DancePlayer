@@ -125,10 +125,10 @@ const DANCE_ABBR: Record<DanceType, string> = {
   Rumba: 'RB',
   'Paso Doble': 'PD',
   Jive: 'JV',
-  Waltz: 'WZ',
+  Waltz: 'SW',
   Tango: 'TG',
   'Viennese Waltz': 'VW',
-  Foxtrot: 'FT',
+  Foxtrot: 'SF',
   Quickstep: 'QS',
 }
 
@@ -1534,36 +1534,37 @@ function App() {
 
           {/* Playlist pickers: dance dances + other playlists */}
           <div className="player-playlist-pickers">
-            {dancePlaylists.length > 0 && (
-              <select
-                value={dancePlaylists.some((p) => p.id === playlist.id) ? playlist.id : ''}
-                onChange={(e) => {
-                  const found = dancePlaylists.find((p) => p.id === e.target.value)
-                  if (found) loadSavedPlaylist(found)
-                }}
-              >
-                <option value="" disabled>Dance…</option>
-                {dancePlaylists.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            )}
-            {savedPlaylists.filter((sp) => !dancePlaylists.some((dp) => dp.id === sp.id)).length > 0 && (
-              <select
-                value={savedPlaylists.some((p) => p.id === playlist.id) && !dancePlaylists.some((dp) => dp.id === playlist.id) ? playlist.id : ''}
-                onChange={(e) => {
-                  const found = savedPlaylists.find((p) => p.id === e.target.value)
-                  if (found) loadSavedPlaylist(found)
-                }}
-              >
-                <option value="" disabled>Playlist…</option>
-                {savedPlaylists
-                  .filter((sp) => !dancePlaylists.some((dp) => dp.id === sp.id))
-                  .map((p) => (
+            <select
+              value={dancePlaylists.some((p) => p.id === playlist.id) ? playlist.id : ''}
+              onChange={(e) => {
+                const found = dancePlaylists.find((p) => p.id === e.target.value)
+                if (found) loadSavedPlaylist(found)
+              }}
+              disabled={dancePlaylists.length === 0}
+            >
+              <option value="">Dance…</option>
+              {dancePlaylists.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            {(() => {
+              const custom = savedPlaylists.filter((sp) => !dancePlaylists.some((dp) => dp.id === sp.id))
+              return (
+                <select
+                  value={custom.some((p) => p.id === playlist.id) ? playlist.id : ''}
+                  onChange={(e) => {
+                    const found = custom.find((p) => p.id === e.target.value)
+                    if (found) loadSavedPlaylist(found)
+                  }}
+                  disabled={custom.length === 0}
+                >
+                  <option value="">My Playlists…</option>
+                  {custom.map((p) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
-              </select>
-            )}
+                </select>
+              )
+            })()}
           </div>
 
           <audio ref={audioRef} controls className="audio-player" />
