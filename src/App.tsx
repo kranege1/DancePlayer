@@ -1116,35 +1116,6 @@ function App() {
             </button>
           </div>
 
-          {/* Manual break inserter — playlist-level only */}
-          <h3>Insert break into playlist</h3>
-          <div className="row compact">
-            <label>
-              Duration (s)
-              <input
-                type="number"
-                min={5}
-                max={300}
-                value={manualBreakSec}
-                onChange={(e) => setManualBreakSec(Number(e.target.value))}
-              />
-            </label>
-            <label>
-              Mode
-              <select
-                value={manualBreakMode}
-                onChange={(e) => setManualBreakMode(e.target.value as BreakItem['mode'])}
-              >
-                <option value="silence">Silence</option>
-                <option value="countdown">Countdown</option>
-                <option value="applause">Applause</option>
-              </select>
-            </label>
-            <button type="button" onClick={addManualBreak}>
-              Add Break
-            </button>
-          </div>
-
           <div className="playlist-header">
             <h3>Queue ({playlist.entries.length})</h3>
             {playlist.entries.length > 0 && (
@@ -1201,7 +1172,7 @@ function App() {
         {/* ── Player ── */}
         {activeTab === 'player' && (
         <section className="panel">
-          <h2>Player</h2>
+          <h2 className="player-playlist-title">{playlist.name}</h2>
           <audio ref={audioRef} controls className="audio-player" />
           <div className="row compact">
             <button type="button" onClick={playFromStart}>
@@ -1253,6 +1224,35 @@ function App() {
             </label>
           </div>
 
+          {/* Break inserter — in Player so you can drop a break into the live queue */}
+          <h3>Insert break</h3>
+          <div className="row compact">
+            <label>
+              Duration (s)
+              <input
+                type="number"
+                min={5}
+                max={300}
+                value={manualBreakSec}
+                onChange={(e) => setManualBreakSec(Number(e.target.value))}
+              />
+            </label>
+            <label>
+              Mode
+              <select
+                value={manualBreakMode}
+                onChange={(e) => setManualBreakMode(e.target.value as BreakItem['mode'])}
+              >
+                <option value="silence">Silence</option>
+                <option value="countdown">Countdown</option>
+                <option value="applause">Applause</option>
+              </select>
+            </label>
+            <button type="button" onClick={addManualBreak}>
+              Add Break
+            </button>
+          </div>
+
           <h3>Voice commands</h3>
           {!window.isSecureContext && (
             <div className="https-warning">
@@ -1287,6 +1287,71 @@ function App() {
             German variants (langsamer, schneller, nächstes Lied…).
           </p>
           {repeatAnnounce && <p className="hint">Last announcement: {repeatAnnounce}</p>}
+
+          {/* ── Upcoming queue ── */}
+          {playlist.entries.length > 0 && (
+            <>
+              <h3 className="upcoming-heading">
+                Up next
+                {currentIndex >= 0 && (
+                  <span className="upcoming-progress">
+                    {currentIndex + 1} / {playlist.entries.length}
+                  </span>
+                )}
+              </h3>
+              <div className="player-queue-list">
+                {playlist.entries.map((entry, index) => {
+                  const isActive = entry.id === activeEntryId
+                  const isPast = currentIndex >= 0 && index < currentIndex
+                  if (entry.type === 'break') {
+                    return (
+                      <div
+                        key={entry.id}
+                        className={`pq-row pq-break${isActive ? ' pq-active' : ''}${isPast ? ' pq-past' : ''}`}
+                      >
+                        <span className="pq-num">{index + 1}</span>
+                        <span className="pq-label">⏸ Break {entry.breakItem.durationSec}s ({entry.breakItem.mode})</span>
+                        <button
+                          type="button" className="remove-btn"
+                          onClick={() => removePlaylistEntry(entry.id)}
+                          aria-label="Remove"
+                        >✕</button>
+                      </div>
+                    )
+                  }
+                  const t = tracksById[entry.trackId]
+                  if (!t) return (
+                    <div key={entry.id} className="pq-row pq-missing">
+                      <span className="pq-num">{index + 1}</span>
+                      <span className="pq-label">Missing track</span>
+                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
+                    </div>
+                  )
+                  return (
+                    <div
+                      key={entry.id}
+                      className={`pq-row${isActive ? ' pq-active' : ''}${isPast ? ' pq-past' : ''}`}
+                      onClick={() => void playEntryByIndex(index)}
+                    >
+                      <span className="pq-num">{index + 1}</span>
+                      <span className="dance-badge pq-badge" style={{ background: DANCE_COLORS[t.danceType] }}>
+                        {t.danceType}
+                      </span>
+                      <span className="pq-info">
+                        <span className="pq-title">{cleanDisplayTitle(t.title)}</span>
+                        {t.artist && <span className="pq-artist">{t.artist}</span>}
+                      </span>
+                      <button
+                        type="button" className="remove-btn"
+                        onClick={(e) => { e.stopPropagation(); removePlaylistEntry(entry.id) }}
+                        aria-label="Remove"
+                      >✕</button>
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          )}
         </section>
         )}
 
