@@ -1066,6 +1066,94 @@ button.cta:hover {
   transition: background 0.1s;
 }
 
+/* ── Track Edit Modal ─────────────────────────────────────────────── */
+.edit-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.edit-modal {
+  background: #fff;
+  border-radius: 18px;
+  padding: 24px 20px 20px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.edit-modal-title {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #1a2e35;
+}
+
+.edit-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.edit-modal-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #667;
+}
+
+.edit-modal-input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1.5px solid var(--line);
+  border-radius: 9px;
+  font-size: 0.95rem;
+  background: #f7fafc;
+  color: #1a2e35;
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+
+.edit-modal-input:focus {
+  outline: none;
+  border-color: #00b06b;
+  background: #fff;
+}
+
+.edit-modal-input.readonly {
+  color: #667;
+  background: #f0f3f5;
+  cursor: default;
+}
+
+.edit-modal-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.edit-modal-field.half {
+  min-width: 100px;
+}
+
+.edit-modal-close {
+  align-self: flex-end;
+  margin-top: 4px;
+  padding: 10px 28px;
+}
+
 .pq-row:hover {
   background: #f5f0e8;
 }

@@ -24,6 +24,7 @@ export interface Track {
   id: string
   title: string
   artist?: string
+  filename?: string
   danceType: DanceType
   bpm?: number
   analysisConfidence?: number

@@ -164,6 +164,7 @@ function App() {
   const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>([])
   const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>([])
   const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('songs')
+  const [editingTrackId, setEditingTrackId] = useState<string | null>(null)
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   // Tracks whether the user *intends* listening to stay on — used for safe auto-restart on iOS
@@ -354,6 +355,7 @@ function App() {
         id,
         title: finalTitle,
         artist: finalArtist,
+        filename: file.name,
         danceType,
         analysisConfidence: finalConfidence,
         hasCachedAudio: true,
@@ -1263,59 +1265,9 @@ function App() {
                     </button>
                   </span>
                 </div>
-                {/* Collapsed edit controls */}
+                {/* Edit button → opens modal */}
                 <details className="track-details" onClick={(e) => e.stopPropagation()}>
-                  <summary>Edit</summary>
-                  <div className="row compact">
-                    <label>
-                      Title
-                      <input
-                        type="text"
-                        value={track.title}
-                        onChange={(e) => updateTrack(track.id, { title: e.target.value })}
-                      />
-                    </label>
-                    <label>
-                      Artist
-                      <input
-                        type="text"
-                        value={track.artist ?? ''}
-                        placeholder="Artist name"
-                        onChange={(e) => updateTrack(track.id, { artist: e.target.value || undefined })}
-                      />
-                    </label>
-                  </div>
-                  <div className="row compact">
-                    <label>
-                      Cue (s)
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.1}
-                        value={track.cueStartSec}
-                        onChange={(e) => updateTrack(track.id, { cueStartSec: Number(e.target.value) })}
-                      />
-                    </label>
-                    <label>
-                      Playtime (s)
-                      <input
-                        type="number"
-                        min={10}
-                        value={track.targetPlaytimeSec}
-                        onChange={(e) => updateTrack(track.id, { targetPlaytimeSec: Number(e.target.value) })}
-                      />
-                    </label>
-                    <label>
-                      Fade (s)
-                      <input
-                        type="number"
-                        min={1}
-                        max={10}
-                        value={track.fadeOutSec}
-                        onChange={(e) => updateTrack(track.id, { fadeOutSec: Number(e.target.value) })}
-                      />
-                    </label>
-                  </div>
+                  <summary onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditingTrackId(track.id) }}>Edit</summary>
                 </details>
               </div>
             ))}
@@ -1836,6 +1788,85 @@ function App() {
           </button>
         ))}
       </nav>
+
+      {/* ── Track Edit Modal ── */}
+      {editingTrackId && (() => {
+        const t = tracks.find((tr) => tr.id === editingTrackId)
+        if (!t) return null
+        return (
+          <div className="edit-modal-overlay" onClick={() => setEditingTrackId(null)}>
+            <div className="edit-modal" onClick={(e) => e.stopPropagation()}>
+              <h3 className="edit-modal-title">Edit Track</h3>
+              {t.filename && (
+                <label className="edit-modal-field">
+                  <span className="edit-modal-label">File</span>
+                  <input type="text" readOnly value={t.filename} className="edit-modal-input readonly" />
+                </label>
+              )}
+              <label className="edit-modal-field">
+                <span className="edit-modal-label">Title</span>
+                <input
+                  type="text"
+                  className="edit-modal-input"
+                  value={t.title}
+                  onChange={(e) => updateTrack(t.id, { title: e.target.value })}
+                />
+              </label>
+              <label className="edit-modal-field">
+                <span className="edit-modal-label">Artist</span>
+                <input
+                  type="text"
+                  className="edit-modal-input"
+                  value={t.artist ?? ''}
+                  placeholder="Artist name"
+                  onChange={(e) => updateTrack(t.id, { artist: e.target.value || undefined })}
+                />
+              </label>
+              <label className="edit-modal-field">
+                <span className="edit-modal-label">Dance</span>
+                <select
+                  className="edit-modal-input"
+                  value={t.danceType}
+                  onChange={(e) => updateTrack(t.id, { danceType: e.target.value as DanceType })}
+                >
+                  {DANCES.map((d) => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="edit-modal-row">
+                <label className="edit-modal-field half">
+                  <span className="edit-modal-label">Cue (s)</span>
+                  <input
+                    type="number" min={0} step={0.1} className="edit-modal-input"
+                    value={t.cueStartSec}
+                    onChange={(e) => updateTrack(t.id, { cueStartSec: Number(e.target.value) })}
+                  />
+                </label>
+                <label className="edit-modal-field half">
+                  <span className="edit-modal-label">Playtime (s)</span>
+                  <input
+                    type="number" min={10} className="edit-modal-input"
+                    value={t.targetPlaytimeSec}
+                    onChange={(e) => updateTrack(t.id, { targetPlaytimeSec: Number(e.target.value) })}
+                  />
+                </label>
+                <label className="edit-modal-field half">
+                  <span className="edit-modal-label">Fade (s)</span>
+                  <input
+                    type="number" min={1} max={10} className="edit-modal-input"
+                    value={t.fadeOutSec}
+                    onChange={(e) => updateTrack(t.id, { fadeOutSec: Number(e.target.value) })}
+                  />
+                </label>
+              </div>
+              <button type="button" className="edit-modal-close cta" onClick={() => setEditingTrackId(null)}>
+                Done
+              </button>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
