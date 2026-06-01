@@ -174,6 +174,7 @@ function App() {
   const activeObjectUrlRef = useRef<string | null>(null)
   const breakTimeoutRef = useRef<number | null>(null)
   const breakTickRef = useRef<number | null>(null)
+  const breakAudioCtxRef = useRef<AudioContext | null>(null)
   const trackProgressRef = useRef<number | null>(null)
   const fadeFrameRef = useRef<number | null>(null)
 
@@ -652,37 +653,8 @@ function App() {
     const mainAudio = audioRef.current
     if (mainAudio && !mainAudio.paused) mainAudio.pause()
 
-    // ── Applause ────────────────────────────────────────────────────
-    if (rule.breakMode === 'applause') {
-      const playApplauseBurst = (burstSec: number) => {
-        try {
-          const ctx = new AudioContext()
-          void ctx.resume()
-          const sr = ctx.sampleRate
-          const bufSize = Math.ceil(sr * burstSec)
-          const buf = ctx.createBuffer(2, bufSize, sr)
-          for (let ch = 0; ch < 2; ch++) {
-            const data = buf.getChannelData(ch)
-            const fadeS = Math.min(sr * 0.8, bufSize)
-            for (let i = 0; i < bufSize; i++) {
-              const env = i < fadeS ? i / fadeS : i > bufSize - fadeS ? (bufSize - i) / fadeS : 1
-              data[i] = (Math.random() * 2 - 1) * env * 0.4
-            }
-          }
-          const src = ctx.createBufferSource()
-          src.buffer = buf
-          const bp1 = ctx.createBiquadFilter(); bp1.type = 'bandpass'; bp1.frequency.value = 1800; bp1.Q.value = 0.5
-          const bp2 = ctx.createBiquadFilter(); bp2.type = 'bandpass'; bp2.frequency.value = 3500; bp2.Q.value = 0.8
-          const gain = ctx.createGain(); gain.gain.value = 1.2
-          src.connect(bp1); src.connect(bp2); bp1.connect(gain); bp2.connect(gain); gain.connect(ctx.destination)
-          src.start()
-          src.onended = () => void ctx.close()
-        } catch { /* AudioContext blocked */ }
-      }
-      const burstLen = Math.min(5, dur * 0.3)
-      playApplauseBurst(burstLen)
-      if (dur > 10) window.setTimeout(() => playApplauseBurst(burstLen), Math.max(0, dur - burstLen) * 1000)
-    }
+    // ── Applause / Silence audio ─────────────────────────────────────
+    startBreakAudio(rule.breakMode, dur)
 
     // ── Countdown ───────────────────────────────────────────────────
     if (rule.breakMode === 'countdown') {
@@ -733,6 +705,75 @@ function App() {
     }
     void audio.play()
     setStatus(`Previewing ${track.title}. Adjust the dance in the list if needed.`)
+  }
+
+  /** Plays synthesized applause or a silent keep-alive signal for the break duration. */
+  function startBreakAudio(mode: 'applause' | 'silence' | 'countdown', durationSec: number) {
+    // Close any previous break audio context
+    if (breakAudioCtxRef.current) { void breakAudioCtxRef.current.close(); breakAudioCtxRef.current = null }
+    if (mode !== 'applause' && mode !== 'silence') return
+
+    try {
+      const ctx = new AudioContext()
+      void ctx.resume()
+      breakAudioCtxRef.current = ctx
+      const sr = ctx.sampleRate
+      const now = ctx.currentTime
+
+      // ── 2-second looping noise buffer (shared across layers) ──────────
+      const loopSec = 2
+      const loopBuf = ctx.createBuffer(2, Math.ceil(sr * loopSec), sr)
+      for (let ch = 0; ch < 2; ch++) {
+        const d = loopBuf.getChannelData(ch)
+        for (let i = 0; i < d.length; i++) d[i] = mode === 'applause' ? Math.random() * 2 - 1 : 0
+      }
+
+      if (mode === 'silence') {
+        // Near-zero signal keeps iOS audio session alive without audible sound
+        const src = ctx.createBufferSource()
+        src.buffer = loopBuf
+        src.loop = true
+        const g = ctx.createGain(); g.gain.value = 0.0001
+        src.connect(g); g.connect(ctx.destination)
+        src.start(now); src.stop(now + durationSec)
+        src.onended = () => void ctx.close()
+        return
+      }
+
+      // ── Applause: 4 bandpass noise layers ────────────────────────────
+      const fadeIn  = Math.min(0.8, durationSec * 0.12)
+      const fadeOut = Math.min(1.8, durationSec * 0.25)
+
+      const master = ctx.createGain()
+      master.gain.setValueAtTime(0, now)
+      master.gain.linearRampToValueAtTime(1, now + fadeIn)
+      master.gain.setValueAtTime(1, now + durationSec - fadeOut)
+      master.gain.exponentialRampToValueAtTime(0.0001, now + durationSec)
+
+      const comp = ctx.createDynamicsCompressor()
+      comp.threshold.value = -20; comp.knee.value = 8
+      comp.ratio.value = 4; comp.attack.value = 0.004; comp.release.value = 0.12
+      comp.connect(master); master.connect(ctx.destination)
+
+      // [freq, Q, level]
+      const layers: [number, number, number][] = [
+        [320,  0.5, 0.35],   // crowd murmur
+        [1100, 0.7, 0.55],   // clap body
+        [3000, 1.0, 0.45],   // clap snap / presence
+        [6500, 1.8, 0.18],   // air / hiss
+      ]
+      layers.forEach(([freq, q, level]) => {
+        const src = ctx.createBufferSource()
+        src.buffer = loopBuf; src.loop = true
+        const bp = ctx.createBiquadFilter()
+        bp.type = 'bandpass'; bp.frequency.value = freq; bp.Q.value = q
+        const g = ctx.createGain(); g.gain.value = level
+        src.connect(bp); bp.connect(g); g.connect(comp)
+        src.start(now); src.stop(now + durationSec)
+      })
+
+      window.setTimeout(() => { void ctx.close(); breakAudioCtxRef.current = null }, (durationSec + 0.5) * 1000)
+    } catch { /* AudioContext unavailable */ }
   }
 
   function speak(text: string): Promise<void> {
@@ -798,61 +839,8 @@ function App() {
       setBreakSecondsLeft(dur)
       setStatus(`Break: ${dur}s (${entry.breakItem.mode})`)
 
-      // ── Applause synthesis ──────────────────────────────────────────
-      if (entry.breakItem.mode === 'applause') {
-        // Each burst gets its own fresh AudioContext started immediately,
-        // avoiding iOS suspend issues with long-delayed ctx.start() calls.
-        const playApplauseBurst = (burstSec: number) => {
-          try {
-            const ctx = new AudioContext()
-            void ctx.resume()
-            const sr = ctx.sampleRate
-            const bufSize = Math.ceil(sr * burstSec)
-            const buf = ctx.createBuffer(2, bufSize, sr)
-            // Two channels with independent noise for a wider crowd feel
-            for (let ch = 0; ch < 2; ch++) {
-              const data = buf.getChannelData(ch)
-              const fadeS = Math.min(sr * 0.8, bufSize)
-              for (let i = 0; i < bufSize; i++) {
-                const env = i < fadeS
-                  ? i / fadeS
-                  : i > bufSize - fadeS
-                    ? (bufSize - i) / fadeS
-                    : 1
-                data[i] = (Math.random() * 2 - 1) * env * 0.4
-              }
-            }
-            const src = ctx.createBufferSource()
-            src.buffer = buf
-            // Two cascaded bandpass filters: clap body ~1800Hz, presence ~3500Hz
-            const bp1 = ctx.createBiquadFilter()
-            bp1.type = 'bandpass'
-            bp1.frequency.value = 1800
-            bp1.Q.value = 0.5
-            const bp2 = ctx.createBiquadFilter()
-            bp2.type = 'bandpass'
-            bp2.frequency.value = 3500
-            bp2.Q.value = 0.8
-            const gain = ctx.createGain()
-            gain.gain.value = 1.2
-            src.connect(bp1)
-            src.connect(bp2)
-            bp1.connect(gain)
-            bp2.connect(gain)
-            gain.connect(ctx.destination)
-            src.start()
-            src.onended = () => void ctx.close()
-          } catch { /* AudioContext blocked before user gesture */ }
-        }
-
-        const burstLen = Math.min(5, dur * 0.3)
-        playApplauseBurst(burstLen) // burst at break start
-        if (dur > 10) {
-          // Schedule end burst via setTimeout so a fresh context is created
-          // close to play time (avoids iOS auto-suspend of long-idle contexts)
-          window.setTimeout(() => playApplauseBurst(burstLen), Math.max(0, dur - burstLen) * 1000)
-        }
-      }
+      // ── Applause / Silence audio ─────────────────────────────────────
+      startBreakAudio(entry.breakItem.mode, dur)
 
       // ── Countdown speech ────────────────────────────────────────────
       if (entry.breakItem.mode === 'countdown') {
