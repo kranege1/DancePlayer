@@ -965,21 +965,24 @@ function App() {
         const fadeWindow = getFadeWindow(startSec, track.targetPlaytimeSec, 5) // always 5 s fade in timed mode
 
         const tick = () => {
-          if (!audio || audio.paused) return
-          if (audio.currentTime >= fadeWindow.fadeStart && audio.currentTime <= fadeWindow.end) {
-            const remain = Math.max(0, fadeWindow.end - audio.currentTime)
-            audio.volume = Math.max(0, remain / fadeWindow.fade)
-          }
-          if (audio.currentTime >= fadeWindow.end) {
-            audio.pause()
-            audio.volume = 1
-            const rule = sessionRuleRef.current
-            if (rule.autoBreakEnabled) {
-              runBreakThenAdvance(index + 1, rule)
-            } else {
-              void playEntryByIndex(index + 1)
+          if (!audio || audio.ended) return
+          // Keep rescheduling even while buffering/paused — do NOT bail out on paused
+          if (!audio.paused) {
+            if (audio.currentTime >= fadeWindow.fadeStart && audio.currentTime <= fadeWindow.end) {
+              const remain = Math.max(0, fadeWindow.end - audio.currentTime)
+              audio.volume = Math.max(0, remain / fadeWindow.fade)
             }
-            return
+            if (audio.currentTime >= fadeWindow.end) {
+              audio.pause()
+              audio.volume = 1
+              const rule = sessionRuleRef.current
+              if (rule.autoBreakEnabled) {
+                runBreakThenAdvance(index + 1, rule)
+              } else {
+                void playEntryByIndex(index + 1)
+              }
+              return
+            }
           }
           fadeFrameRef.current = requestAnimationFrame(tick)
         }
