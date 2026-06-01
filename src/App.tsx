@@ -519,16 +519,24 @@ function App() {
   }
 
   function addManualBreak() {
-    const breakItem: BreakItem = {
+    const makeBreak = (): BreakItem => ({
       id: createId('break'),
       mode: manualBreakMode,
-      durationSec: Math.max(5, Math.min(50, manualBreakSec)),
+      durationSec: Math.max(5, Math.min(300, manualBreakSec)),
       label: `Manual ${manualBreakMode} break`,
-    }
-    setPlaylist((prev) => ({
-      ...prev,
-      entries: [...prev.entries, { id: createId('entry-break'), type: 'break', breakItem }],
-    }))
+    })
+    setPlaylist((prev) => {
+      const result: PlaylistEntry[] = []
+      for (let i = 0; i < prev.entries.length; i++) {
+        result.push(prev.entries[i])
+        // insert a break after every track that isn't already followed by a break
+        if (prev.entries[i].type === 'track' && prev.entries[i + 1]?.type !== 'break') {
+          result.push({ id: createId('entry-break'), type: 'break', breakItem: makeBreak() })
+        }
+      }
+      // if playlist is empty or last entry is a track with no trailing break already added, nothing extra needed
+      return { ...prev, entries: result }
+    })
   }
 
   function previewTrack(trackId: string) {
@@ -562,10 +570,15 @@ function App() {
     setStatus(`Previewing ${track.title}. Adjust the dance in the list if needed.`)
   }
 
-  function speak(text: string) {
-    const utterance = new SpeechSynthesisUtterance(text)
-    utterance.lang = settings.language === 'de' ? 'de-DE' : 'en-US'
-    window.speechSynthesis.speak(utterance)
+  function speak(text: string): Promise<void> {
+    return new Promise((resolve) => {
+      const utterance = new SpeechSynthesisUtterance(text)
+      utterance.lang = settings.language === 'de' ? 'de-DE' : 'en-US'
+      utterance.onend = () => resolve()
+      utterance.onerror = () => resolve() // always resolve so playback is never blocked
+      window.speechSynthesis.cancel() // clear any queued speech first
+      window.speechSynthesis.speak(utterance)
+    })
   }
 
   function clearPlaybackTimers() {
@@ -632,8 +645,8 @@ function App() {
 
     if (sessionRule.announcementEnabled) {
       const phrase = settings.language === 'de' ? `Naechste ${track.danceType}` : `Next ${track.danceType}`
-      speak(phrase)
       setRepeatAnnounce(phrase)
+      await speak(phrase) // wait for announcement to finish before starting playback
     }
 
     const audio = audioRef.current
