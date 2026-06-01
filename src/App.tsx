@@ -124,8 +124,14 @@ function cleanDisplayTitle(raw: string): string {
   let s = raw.trim()
   s = s.replace(/^(\d{1,3}\.?\s*[-\u2013]?\s+|Track\s+\d+\s*[-\u2013]?\s*)/i, '')
   s = s.replace(/[\s\-\u2013]+[\(\[]?(?:[A-Z][a-z]{0,3}\s+\d+|\d+\s*BPM|BPM\s*\d+)[\)\]]?$/i, '')
+  // Also strip inline dance/BPM annotations anywhere in the title, e.g. " (Sb 51)" or "(Ch 32)"
+  s = s.replace(/\s*[\(\[][A-Z][a-z]{0,3}\s+\d+[\)\]]/g, '')
   s = s.replace(/_/g, ' ').trim()
   return s || raw
+}
+
+function cleanStoredTitle(raw: string): string {
+  return cleanDisplayTitle(raw)
 }
 
 // Try to extract "Artist - Title" from a bare filename (no extension)
@@ -1185,6 +1191,25 @@ function App() {
           {/* Filter + bulk-add toolbar */}
           {tracks.length > 0 && (
             <div className="lib-toolbar">
+              {tracks.length > 0 && (
+                <button
+                  type="button"
+                  title="Strip dance codes and track numbers from all stored titles"
+                  onClick={() => {
+                    let count = 0
+                    setTracks((prev) => prev.map((tr) => {
+                      const cleaned = cleanStoredTitle(tr.title)
+                      // Also clear artist if it's just a bare number (e.g. "08")
+                      const artistCleaned = tr.artist && /^\d{1,3}$/.test(tr.artist.trim()) ? undefined : tr.artist
+                      if (cleaned !== tr.title || artistCleaned !== tr.artist) { count++ }
+                      return { ...tr, title: cleaned, artist: artistCleaned }
+                    }))
+                    setStatus(`Cleaned ${count} track title${count !== 1 ? 's' : ''}.`)
+                  }}
+                >
+                  ✦ Clean Titles
+                </button>
+              )}
               <button type="button" onClick={selectAllFiltered}>
                 Select all ({visibleTracks.length})
               </button>
