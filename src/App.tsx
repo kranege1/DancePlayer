@@ -234,8 +234,8 @@ function App() {
   }, [playlist.entries])
 
   const currentIndex = playableEntries.findIndex((entry) => entry.id === activeEntryId)
-  const currentEntry = currentIndex >= 0 ? playableEntries[currentIndex] : null
-  const currentTrack = currentEntry?.type === 'track' ? tracksById[currentEntry.trackId] : null
+  // currentEntry/currentTrack removed (shown via pq-active row in Player tab)
+  // currentTrack removed (now shown via pq-active row in Player tab)
 
   function updateTrack(trackId: string, update: Partial<Track>) {
     setTracks((prev) => prev.map((track) => (track.id === trackId ? { ...track, ...update } : track)))
@@ -420,18 +420,32 @@ function App() {
       if (!byDance[track.danceType]) byDance[track.danceType] = []
       byDance[track.danceType]!.push(track)
     }
-    const newPlaylists: Playlist[] = (Object.keys(byDance) as DanceType[]).map((dance) => ({
-      id: `dance-playlist-${dance}`,
-      name: dance,
-      entries: (byDance[dance] ?? []).sort(sortByTitle).map((t) => ({
-        id: createId('entry-track'),
-        type: 'track' as const,
-        trackId: t.id,
-      })),
-    }))
-    setDancePlaylists(newPlaylists)
+    setDancePlaylists((prev) => {
+      const existingById = Object.fromEntries(prev.map((p) => [p.id, p]))
+      const dances = Object.keys(byDance) as DanceType[]
+      const updated: Playlist[] = dances.map((dance) => {
+        const id = `dance-playlist-${dance}`
+        const existing = existingById[id]
+        const existingTrackIds = new Set(
+          (existing?.entries ?? []).filter((e) => e.type === 'track').map((e) => (e as { trackId: string }).trackId)
+        )
+        const newEntries = (byDance[dance] ?? [])
+          .filter((t) => !existingTrackIds.has(t.id))
+          .sort(sortByTitle)
+          .map((t) => ({ id: createId('entry-track'), type: 'track' as const, trackId: t.id }))
+        return {
+          id,
+          name: dance,
+          entries: [...(existing?.entries ?? []), ...newEntries],
+        }
+      })
+      // keep any dance playlists that weren't in this distribution (shouldn't happen but safe)
+      const updatedIds = new Set(updated.map((p) => p.id))
+      const kept = prev.filter((p) => !updatedIds.has(p.id))
+      return [...updated, ...kept]
+    })
     const count = Object.keys(byDance).length
-    setStatus(`Distributed ${tracks.length} track(s) into ${count} dance playlist(s).`)
+    setStatus(`Distributed ${tracks.length} track(s) into ${count} dance playlist(s) (no duplicates added).`)
   }
 
   // ── FR-18 Export / Import ──────────────────────────────────────────────
@@ -515,30 +529,6 @@ function App() {
       ...prev,
       entries: [...prev.entries, { id: createId('entry-break'), type: 'break', breakItem }],
     }))
-  }
-
-  function buildSessionFromRule() {
-    const selected = tracks.filter((track) => track.danceType === sessionRule.danceType).sort(sortByTitle)
-    const entries: PlaylistEntry[] = []
-
-    selected.forEach((track, index) => {
-      entries.push({ id: createId('entry-track'), type: 'track', trackId: track.id })
-      if (sessionRule.autoBreakEnabled && index < selected.length - 1) {
-        entries.push({
-          id: createId('entry-break'),
-          type: 'break',
-          breakItem: {
-            id: createId('break'),
-            mode: 'countdown',
-            durationSec: sessionRule.breakDurationSec,
-            label: `${sessionRule.danceType} session break`,
-          },
-        })
-      }
-    })
-
-    setPlaylist((prev) => ({ ...prev, entries }))
-    setStatus(`Built session with ${selected.length} ${sessionRule.danceType} track(s).`)
   }
 
   function previewTrack(trackId: string) {
@@ -1077,95 +1067,7 @@ function App() {
             <input value={playlist.name} onChange={(e) => renameCurrentPlaylist(e.target.value)} />
           </label>
 
-          {/* Session rule builder */}
-          <h3>Auto-build from session rule</h3>
-          <div className="row compact">
-            <label>
-              Dance
-              <select
-                value={sessionRule.danceType}
-                onChange={(e) => setSessionRule((prev) => ({ ...prev, danceType: e.target.value as DanceType }))}
-              >
-                {DANCES.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Break (s)
-              <input
-                type="number"
-                min={5}
-                max={120}
-                value={sessionRule.breakDurationSec}
-                onChange={(e) => setSessionRule((prev) => ({ ...prev, breakDurationSec: Number(e.target.value) }))}
-              />
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={sessionRule.autoBreakEnabled}
-                onChange={(e) => setSessionRule((prev) => ({ ...prev, autoBreakEnabled: e.target.checked }))}
-              />
-              Auto breaks
-            </label>
-            <button type="button" onClick={buildSessionFromRule}>
-              Build
-            </button>
-          </div>
-
-          <div className="playlist-header">
-            <h3>Queue ({playlist.entries.length})</h3>
-            {playlist.entries.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setPlaylist((prev) => ({ ...prev, entries: [] }))}
-              >
-                Clear all
-              </button>
-            )}
-          </div>
-          <div className="now-playing-banner">
-            {currentTrack ? (
-              <>
-                Now playing: <strong>{currentTrack.title}</strong> · {currentTrack.danceType}
-              </>
-            ) : (
-              'Now playing: nothing'
-            )}
-          </div>
-          <div className="playlist-list">
-            {playlist.entries.map((entry, index) => (
-              <div key={entry.id} className={`playlist-item ${entry.id === activeEntryId ? 'active' : ''}`}>
-                <span className="badge">{index + 1}</span>
-                <span className="playlist-item-label">
-                  {entry.type === 'track' ? (() => {
-                    const t = tracksById[entry.trackId]
-                    if (!t) return <span>Missing track</span>
-                    return (
-                      <span className="playlist-item-content">
-                        <span className="dance-badge" style={{ background: DANCE_COLORS[t.danceType] }}>
-                          {t.danceType}
-                        </span>
-                        <span className="playlist-item-title">{cleanDisplayTitle(t.title)}</span>
-                        {t.artist && <span className="playlist-item-artist">{t.artist}</span>}
-                      </span>
-                    )
-                  })() : `⏸ Break ${entry.breakItem.durationSec}s (${entry.breakItem.mode})`}
-                </span>
-                <button
-                  type="button"
-                  className="remove-btn"
-                  onClick={() => removePlaylistEntry(entry.id)}
-                  aria-label="Remove"
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
+          <p className="playlist-hint">Use the Dance Playlists below to build your queue.</p>
         </section>
         )}
 
@@ -1429,7 +1331,7 @@ function App() {
                           <button
                             type="button"
                             className="add-one-btn"
-                            title="Add to playlist"
+                            title="Add to queue"
                             onClick={(e) => {
                               e.stopPropagation()
                               setPlaylist((prev) => ({
@@ -1439,6 +1341,20 @@ function App() {
                               setStatus(`Added \u201c${t.title}\u201d to playlist.`)
                             }}
                           >+</button>
+                          <button
+                            type="button"
+                            className="remove-dance-track-btn"
+                            title="Remove from dance playlist"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setDancePlaylists((prev) => prev.map((p) =>
+                                p.id === dp.id
+                                  ? { ...p, entries: p.entries.filter((en) => en.id !== entry.id) }
+                                  : p
+                              ))
+                              setStatus(`Removed \u201c${t.title}\u201d from ${dp.name}.`)
+                            }}
+                          >✕</button>
                           <details className="track-details dance-track-edit" onClick={(e) => e.stopPropagation()}>
                             <summary title="Edit title / artist">✎</summary>
                             <div className="row compact">

@@ -656,6 +656,33 @@ button.cta:hover {
   filter: brightness(0.95);
 }
 
+.remove-dance-track-btn {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #fce8e8 0%, #f4c0c0 100%);
+  border: 1px solid #d47070;
+  color: #a02020;
+}
+
+.remove-dance-track-btn:hover {
+  filter: brightness(0.93);
+}
+
+.playlist-hint {
+  margin: 4px 0 12px;
+  font-size: 0.85rem;
+  color: #6b7f8a;
+}
+
 /* ── Dance playlist per-track edit (✎) ── */
 .dance-track-edit {
   flex-shrink: 0;
