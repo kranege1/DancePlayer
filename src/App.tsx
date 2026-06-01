@@ -684,13 +684,18 @@ function App() {
     }, dur * 1000)
   }
 
-  function previewTrack(trackId: string) {
+  async function previewTrack(trackId: string) {
     const track = tracksById[trackId]
-    const file = fileMap[trackId]
     const audio = audioRef.current
 
-    if (!track || !file || !audio) {
+    if (!track || !audio) {
       setStatus('Preview unavailable for this track.')
+      return
+    }
+
+    const file = fileMap[trackId] ?? await getAudioFile(trackId)
+    if (!file) {
+      setStatus('Audio file not cached — re-import the track to preview it.')
       return
     }
 
@@ -1283,7 +1288,7 @@ function App() {
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation()
-                        previewTrack(track.id)
+                        void previewTrack(track.id)
                       }}
                     >
                       Listen
