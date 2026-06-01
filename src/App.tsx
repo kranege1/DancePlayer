@@ -471,16 +471,6 @@ function App() {
     setPreviewingTrackId(trackId)
   }
 
-  function moveQueueEntry(fromIndex: number, dir: -1 | 1) {
-    const toIndex = fromIndex + dir
-    setPlaylist((prev) => {
-      if (toIndex < 0 || toIndex >= prev.entries.length) return prev
-      const entries = [...prev.entries]
-      ;[entries[fromIndex], entries[toIndex]] = [entries[toIndex], entries[fromIndex]]
-      return { ...prev, entries }
-    })
-  }
-
   function saveCurrentPlaylist() {
     if (!playlist.name.trim()) {
       setStatus('Give your playlist a name before saving.')
@@ -1349,66 +1339,6 @@ function App() {
               New
             </button>
           </div>
-
-          {/* ── Live queue editor ── */}
-          <div className="queue-section-header">
-            <span className="queue-label">Queue ({playlist.entries.length})</span>
-            {playlist.entries.length > 0 && (
-              <button
-                type="button"
-                className="clear-queue-btn"
-                onClick={() => setPlaylist((prev) => ({ ...prev, entries: [] }))}
-              >
-                Clear
-              </button>
-            )}
-          </div>
-          {playlist.entries.length === 0 ? (
-            <p className="queue-empty-hint">Tap + on any track in the dance playlists below to add it here.</p>
-          ) : (
-            <div className="queue-editor">
-              {playlist.entries.map((entry, index) => {
-                if (entry.type === 'break') {
-                  return (
-                    <div key={entry.id} className="qe-row qe-break">
-                      <span className="qe-num">{index + 1}</span>
-                      <span className="qe-label">⏸ Break {entry.breakItem.durationSec}s ({entry.breakItem.mode})</span>
-                      <div className="qe-actions">
-                        <button type="button" onClick={() => moveQueueEntry(index, -1)} disabled={index === 0} aria-label="Move up">↑</button>
-                        <button type="button" onClick={() => moveQueueEntry(index, 1)} disabled={index === playlist.entries.length - 1} aria-label="Move down">↓</button>
-                        <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
-                      </div>
-                    </div>
-                  )
-                }
-                const t = tracksById[entry.trackId]
-                if (!t) return (
-                  <div key={entry.id} className="qe-row qe-missing">
-                    <span className="qe-num">{index + 1}</span>
-                    <span className="qe-label">Missing track</span>
-                    <div className="qe-actions">
-                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
-                    </div>
-                  </div>
-                )
-                return (
-                  <div key={entry.id} className={`qe-row${entry.id === activeEntryId ? ' qe-active' : ''}`}>
-                    <span className="qe-num">{index + 1}</span>
-                    <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }}>{t.danceType}</span>
-                    <span className="qe-info">
-                      <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
-                      {t.artist && <span className="qe-artist">{t.artist}</span>}
-                    </span>
-                    <div className="qe-actions">
-                      <button type="button" onClick={() => moveQueueEntry(index, -1)} disabled={index === 0} aria-label="Move up">↑</button>
-                      <button type="button" onClick={() => moveQueueEntry(index, 1)} disabled={index === playlist.entries.length - 1} aria-label="Move down">↓</button>
-                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
 
           {/* ── Saved playlists ── */}
           {savedPlaylists.length > 0 && (
