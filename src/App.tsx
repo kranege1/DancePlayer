@@ -58,6 +58,7 @@ interface PersistedState {
   tracks: Track[]
   playlist: Playlist
   dancePlaylists: Playlist[]
+  savedPlaylists: Playlist[]
   settings: AppSettings
   sessionRule: SessionRule
 }
@@ -157,6 +158,7 @@ function App() {
   const [manualBreakSec, setManualBreakSec] = useState(50)
   const [manualBreakMode, setManualBreakMode] = useState<BreakItem['mode']>('countdown')
   const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>([])
+  const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>([])
   const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('songs')
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
@@ -175,6 +177,7 @@ function App() {
       setTracks(parsed.tracks ?? [])
       setPlaylist(parsed.playlist ?? initialPlaylist)
       setDancePlaylists(parsed.dancePlaylists ?? [])
+      setSavedPlaylists(parsed.savedPlaylists ?? [])
       setSettings(parsed.settings ?? initialSettings)
       setSessionRule(parsed.sessionRule ?? initialSessionRule)
       setStatus('Metadata restored. Cached audio will load on demand from device storage.')
@@ -184,9 +187,9 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const payload: PersistedState = { tracks, playlist, dancePlaylists, settings, sessionRule }
+    const payload: PersistedState = { tracks, playlist, dancePlaylists, savedPlaylists, settings, sessionRule }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
-  }, [tracks, playlist, dancePlaylists, settings, sessionRule])
+  }, [tracks, playlist, dancePlaylists, savedPlaylists, settings, sessionRule])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -411,6 +414,60 @@ function App() {
 
   function removePlaylistEntry(entryId: string) {
     setPlaylist((prev) => ({ ...prev, entries: prev.entries.filter((e) => e.id !== entryId) }))
+  }
+
+  function moveQueueEntry(fromIndex: number, dir: -1 | 1) {
+    const toIndex = fromIndex + dir
+    setPlaylist((prev) => {
+      if (toIndex < 0 || toIndex >= prev.entries.length) return prev
+      const entries = [...prev.entries]
+      ;[entries[fromIndex], entries[toIndex]] = [entries[toIndex], entries[fromIndex]]
+      return { ...prev, entries }
+    })
+  }
+
+  function saveCurrentPlaylist() {
+    if (!playlist.name.trim()) {
+      setStatus('Give your playlist a name before saving.')
+      return
+    }
+    setSavedPlaylists((prev) => {
+      const exists = prev.findIndex((p) => p.id === playlist.id)
+      if (exists >= 0) {
+        const next = [...prev]
+        next[exists] = { ...playlist }
+        return next
+      }
+      return [...prev, { ...playlist }]
+    })
+    setStatus(`Playlist "${playlist.name}" saved.`)
+  }
+
+  function loadSavedPlaylist(p: Playlist) {
+    setPlaylist({ ...p, entries: p.entries.map((e) => ({ ...e })) })
+    setActiveEntryId(null)
+    setStatus(`Loaded playlist "${p.name}".`)
+  }
+
+  function deleteSavedPlaylist(id: string) {
+    setSavedPlaylists((prev) => prev.filter((p) => p.id !== id))
+  }
+
+  function moveSavedEntry(playlistId: string, fromIndex: number, dir: -1 | 1) {
+    const toIndex = fromIndex + dir
+    setSavedPlaylists((prev) => prev.map((p) => {
+      if (p.id !== playlistId) return p
+      if (toIndex < 0 || toIndex >= p.entries.length) return p
+      const entries = [...p.entries]
+      ;[entries[fromIndex], entries[toIndex]] = [entries[toIndex], entries[fromIndex]]
+      return { ...p, entries }
+    }))
+  }
+
+  function removeSavedEntry(playlistId: string, entryId: string) {
+    setSavedPlaylists((prev) => prev.map((p) =>
+      p.id === playlistId ? { ...p, entries: p.entries.filter((e) => e.id !== entryId) } : p
+    ))
   }
 
   function distributeToDancePlaylists() {
@@ -1068,19 +1125,163 @@ function App() {
         {/* ── Playlists ── */}
         {activeTab === 'playlists' && (
         <section className="panel">
+          {/* ── Topbar: name + Save + New ── */}
           <div className="playlist-topbar">
-            <h2>Playlist</h2>
+            <input
+              className="playlist-name-inline"
+              value={playlist.name}
+              onChange={(e) => renameCurrentPlaylist(e.target.value)}
+              placeholder="Playlist name"
+            />
+            <button type="button" className="cta" onClick={saveCurrentPlaylist}>
+              Save
+            </button>
             <button type="button" onClick={createNewPlaylist}>
-              New playlist
+              New
             </button>
           </div>
 
-          <label className="playlist-name-field">
-            Playlist name
-            <input value={playlist.name} onChange={(e) => renameCurrentPlaylist(e.target.value)} />
-          </label>
+          {/* ── Live queue editor ── */}
+          <div className="queue-section-header">
+            <span className="queue-label">Queue ({playlist.entries.length})</span>
+            {playlist.entries.length > 0 && (
+              <button
+                type="button"
+                className="clear-queue-btn"
+                onClick={() => setPlaylist((prev) => ({ ...prev, entries: [] }))}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          {playlist.entries.length === 0 ? (
+            <p className="queue-empty-hint">Tap + on any track in the dance playlists below to add it here.</p>
+          ) : (
+            <div className="queue-editor">
+              {playlist.entries.map((entry, index) => {
+                if (entry.type === 'break') {
+                  return (
+                    <div key={entry.id} className="qe-row qe-break">
+                      <span className="qe-num">{index + 1}</span>
+                      <span className="qe-label">⏸ Break {entry.breakItem.durationSec}s ({entry.breakItem.mode})</span>
+                      <div className="qe-actions">
+                        <button type="button" onClick={() => moveQueueEntry(index, -1)} disabled={index === 0} aria-label="Move up">↑</button>
+                        <button type="button" onClick={() => moveQueueEntry(index, 1)} disabled={index === playlist.entries.length - 1} aria-label="Move down">↓</button>
+                        <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
+                      </div>
+                    </div>
+                  )
+                }
+                const t = tracksById[entry.trackId]
+                if (!t) return (
+                  <div key={entry.id} className="qe-row qe-missing">
+                    <span className="qe-num">{index + 1}</span>
+                    <span className="qe-label">Missing track</span>
+                    <div className="qe-actions">
+                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
+                    </div>
+                  </div>
+                )
+                return (
+                  <div key={entry.id} className={`qe-row${entry.id === activeEntryId ? ' qe-active' : ''}`}>
+                    <span className="qe-num">{index + 1}</span>
+                    <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }}>{t.danceType}</span>
+                    <span className="qe-info">
+                      <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
+                      {t.artist && <span className="qe-artist">{t.artist}</span>}
+                    </span>
+                    <div className="qe-actions">
+                      <button type="button" onClick={() => moveQueueEntry(index, -1)} disabled={index === 0} aria-label="Move up">↑</button>
+                      <button type="button" onClick={() => moveQueueEntry(index, 1)} disabled={index === playlist.entries.length - 1} aria-label="Move down">↓</button>
+                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
 
-          <p className="playlist-hint">Use the Dance Playlists below to build your queue.</p>
+          {/* ── Saved playlists ── */}
+          {savedPlaylists.length > 0 && (
+            <>
+              <h3 className="saved-playlists-heading">My Playlists</h3>
+              <div className="saved-playlists-list">
+                {savedPlaylists.map((sp) => (
+                  <details key={sp.id} className="saved-playlist-item">
+                    <summary className="saved-playlist-summary">
+                      <span className="saved-playlist-name">{sp.name}</span>
+                      <span className="saved-playlist-count">{sp.entries.length} entries</span>
+                      <button
+                        type="button"
+                        className="cta saved-playlist-load-btn"
+                        onClick={(e) => { e.preventDefault(); loadSavedPlaylist(sp) }}
+                      >
+                        Load
+                      </button>
+                      <button
+                        type="button"
+                        className="remove-btn"
+                        onClick={(e) => { e.preventDefault(); deleteSavedPlaylist(sp.id) }}
+                        aria-label="Delete saved playlist"
+                      >
+                        ✕
+                      </button>
+                    </summary>
+                    <div className="saved-playlist-entries">
+                      {sp.entries.map((entry, idx) => {
+                        if (entry.type === 'break') return (
+                          <div key={entry.id} className="qe-row qe-break">
+                            <span className="qe-num">{idx + 1}</span>
+                            <span className="qe-label">⏸ Break {entry.breakItem.durationSec}s</span>
+                            <div className="qe-actions">
+                              <button type="button" onClick={() => moveSavedEntry(sp.id, idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
+                              <button type="button" onClick={() => moveSavedEntry(sp.id, idx, 1)} disabled={idx === sp.entries.length - 1} aria-label="Move down">↓</button>
+                              <button type="button" className="remove-btn" onClick={() => removeSavedEntry(sp.id, entry.id)} aria-label="Remove">✕</button>
+                            </div>
+                          </div>
+                        )
+                        const t = tracksById[entry.trackId]
+                        if (!t) return (
+                          <div key={entry.id} className="qe-row qe-missing">
+                            <span className="qe-num">{idx + 1}</span>
+                            <span className="qe-label">Missing</span>
+                            <div className="qe-actions">
+                              <button type="button" className="remove-btn" onClick={() => removeSavedEntry(sp.id, entry.id)}>✕</button>
+                            </div>
+                          </div>
+                        )
+                        return (
+                          <div key={entry.id} className="qe-row">
+                            <span className="qe-num">{idx + 1}</span>
+                            <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }}>{t.danceType}</span>
+                            <span className="qe-info">
+                              <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
+                              {t.artist && <span className="qe-artist">{t.artist}</span>}
+                            </span>
+                            <div className="qe-actions">
+                              <button type="button" onClick={() => moveSavedEntry(sp.id, idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
+                              <button type="button" onClick={() => moveSavedEntry(sp.id, idx, 1)} disabled={idx === sp.entries.length - 1} aria-label="Move down">↓</button>
+                              <button type="button" className="remove-btn" onClick={() => removeSavedEntry(sp.id, entry.id)} aria-label="Remove">✕</button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                      <button
+                        type="button"
+                        className="cta saved-playlist-update-btn"
+                        onClick={() => {
+                          setSavedPlaylists((prev) => prev.map((p) => p.id === sp.id ? { ...sp } : p))
+                          setStatus(`Saved changes to "${sp.name}".`)
+                        }}
+                      >
+                        Save changes
+                      </button>
+                    </div>
+                  </details>
+                ))}
+              </div>
+            </>
+          )}
         </section>
         )}
 

@@ -683,6 +683,211 @@ button.cta:hover {
   color: #6b7f8a;
 }
 
+/* ── Playlist name inline input in topbar ── */
+.playlist-name-inline {
+  flex: 1;
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+/* ── Queue section header ── */
+.queue-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 12px 0 6px;
+}
+
+.queue-label {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--night);
+}
+
+.clear-queue-btn {
+  font-size: 0.8rem;
+  padding: 3px 10px;
+  background: #fce8e8;
+  border: 1px solid #d47070;
+  color: #a02020;
+  border-radius: 8px;
+}
+
+.queue-empty-hint {
+  font-size: 0.85rem;
+  color: #6b7f8a;
+  margin: 4px 0 12px;
+}
+
+/* ── Queue editor (shared by Playlists tab and saved playlist detail) ── */
+.queue-editor {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.qe-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 6px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  min-height: 40px;
+}
+
+.qe-row.qe-active {
+  border-color: #0f8f5a;
+  background: #e8f9f0;
+}
+
+.qe-row.qe-break {
+  background: #f7f3ea;
+  font-style: italic;
+}
+
+.qe-row.qe-missing {
+  border-color: #d6a200;
+  background: #fff9ea;
+}
+
+.qe-num {
+  font-size: 0.72rem;
+  color: #8a9aa3;
+  min-width: 20px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.qe-badge {
+  flex-shrink: 0;
+}
+
+.qe-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.qe-title {
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qe-artist {
+  font-size: 0.73rem;
+  color: #6b7f8a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qe-label {
+  flex: 1;
+  font-size: 0.83rem;
+}
+
+.qe-actions {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.qe-actions button {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: #f0f4f8;
+  border: 1px solid #c8d4dc;
+  color: #37474f;
+}
+
+.qe-actions button:disabled {
+  opacity: 0.25;
+  pointer-events: none;
+}
+
+/* ── Saved playlists ── */
+.saved-playlists-heading {
+  margin: 16px 0 8px;
+  font-size: 1rem;
+}
+
+.saved-playlists-list {
+  display: grid;
+  gap: 6px;
+}
+
+.saved-playlist-item {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  overflow: hidden;
+}
+
+.saved-playlist-summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+  background: #f8f9fa;
+  user-select: none;
+}
+
+.saved-playlist-summary::-webkit-details-marker { display: none; }
+
+.saved-playlist-name {
+  flex: 1;
+  font-size: 0.9rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.saved-playlist-count {
+  font-size: 0.75rem;
+  color: #6b7f8a;
+  flex-shrink: 0;
+}
+
+.saved-playlist-load-btn {
+  flex-shrink: 0;
+  font-size: 0.8rem;
+  padding: 3px 10px;
+}
+
+.saved-playlist-entries {
+  padding: 8px;
+  background: #fff;
+  display: grid;
+  gap: 4px;
+}
+
+.saved-playlist-update-btn {
+  margin-top: 6px;
+  font-size: 0.83rem;
+  padding: 5px 14px;
+}
+
 /* ── Dance playlist per-track edit (✎) ── */
 .dance-track-edit {
   flex-shrink: 0;
