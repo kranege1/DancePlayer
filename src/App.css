@@ -1049,6 +1049,93 @@ button.cta:hover {
   margin: 6px 0 2px;
 }
 
+/* ── Player tab: saved-playlist dropdown ── */
+.player-playlist-picker {
+  margin-bottom: 12px;
+}
+.player-playlist-picker select {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--night);
+}
+
+/* ── Player tab: compact icon-only control row ── */
+.player-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.ctrl-btn {
+  padding: 8px 14px;
+  font-size: 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surf);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ctrl-btn:active { background: var(--teal); color: #fff; }
+
+/* ── Player tab: speed row ── */
+.player-speed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: nowrap;
+}
+.speed-btn { padding: 6px 10px; font-size: 0.88rem; }
+.speed-slider { flex: 1; min-width: 0; }
+.speed-label { font-size: 0.85rem; font-weight: 600; min-width: 42px; text-align: right; }
+
+/* ── Player tab: cue/end progress bar ── */
+.cue-bar-wrap { margin-bottom: 10px; }
+.cue-bar {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: #dce3e8;
+  overflow: hidden;
+}
+.cue-bar-active {
+  position: absolute;
+  height: 100%;
+  background: var(--teal);
+  opacity: 0.4;
+}
+.cue-bar-progress {
+  position: absolute;
+  height: 100%;
+  background: var(--teal);
+  opacity: 0.85;
+}
+.cue-marker {
+  position: absolute;
+  top: -2px;
+  width: 3px;
+  height: 14px;
+  background: var(--night);
+  border-radius: 2px;
+  transform: translateX(-50%);
+}
+.cue-bar-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: #6b7f8a;
+  margin-top: 2px;
+}
+
+/* ── Break settings row ── */
+.break-settings-row label + label { margin-left: 16px; }
+
 /* ── Player tab: playlist name headline ── */
 .player-playlist-title {
   margin: 0 0 12px;

@@ -78,7 +78,7 @@ const initialPlaylist: Playlist = {
 const initialSessionRule: SessionRule = {
   danceType: 'Tango',
   autoBreakEnabled: true,
-  breakDurationSec: 50,
+  breakDurationSec: 30,
   breakMode: 'countdown',
   announcementEnabled: true,
 }
@@ -259,8 +259,12 @@ function App() {
     if (!entry || entry.type !== 'track') return null
     return tracksById[entry.trackId]?.danceType ?? null
   }, [activeEntryId, playlist.entries, tracksById])
-  // currentEntry/currentTrack removed (shown via pq-active row in Player tab)
-  // currentTrack removed (now shown via pq-active row in Player tab)
+
+  const currentTrack = useMemo(() => {
+    const entry = playlist.entries.find((e) => e.id === activeEntryId)
+    if (!entry || entry.type !== 'track') return null
+    return tracksById[entry.trackId] ?? null
+  }, [activeEntryId, playlist.entries, tracksById])
 
   function updateTrack(trackId: string, update: Partial<Track>) {
     setTracks((prev) => prev.map((track) => (track.id === trackId ? { ...track, ...update } : track)))
@@ -747,35 +751,40 @@ function App() {
       return
     }
 
-    // ── Applause.mp3: play once at start, once near the end ──────────
+    // ── Applause.mp3: play → silence for durationSec → play again ──
     const playBurst = (delayMs: number) => {
       const a = new Audio('/Applause.mp3')
       a.volume = 1
       applauseAudioRefs.current.push(a)
-      const t = window.setTimeout(() => {
+      window.setTimeout(() => {
         void a.play().catch(() => null)
       }, delayMs)
-      // clean up ref when done
       a.onended = () => {
         applauseAudioRefs.current = applauseAudioRefs.current.filter((x) => x !== a)
       }
-      return t
     }
 
-    playBurst(0) // immediately
-    if (durationSec > 10) {
-      // Schedule second burst 5 s before the break ends (so it finishes naturally)
-      playBurst(Math.max(0, durationSec - 5) * 1000)
-    }
+    // First burst immediately, second burst after durationSec wait
+    playBurst(0)
+    playBurst(durationSec * 1000)
   }
 
   function speak(text: string): Promise<void> {
     return new Promise((resolve) => {
       const utterance = new SpeechSynthesisUtterance(text)
-      utterance.lang = settings.language === 'de' ? 'de-DE' : 'en-US'
+      const lang = settings.language === 'de' ? 'de-DE' : 'en-US'
+      utterance.lang = lang
+      // Prefer a high-quality neural/enhanced voice if available (iOS Siri voices, Google, etc.)
+      const voices = window.speechSynthesis.getVoices()
+      const preferred = voices.find(
+        (v) => v.lang.startsWith(lang.slice(0, 2)) && (v.name.includes('Google') || v.name.includes('Siri') || v.name.includes('Premium') || v.name.includes('Enhanced') || v.name.includes('Neural'))
+      ) ?? voices.find((v) => v.lang.startsWith(lang.slice(0, 2)) && v.localService)
+      if (preferred) utterance.voice = preferred
+      utterance.rate = 0.95
+      utterance.pitch = 1.0
       utterance.onend = () => resolve()
-      utterance.onerror = () => resolve() // always resolve so playback is never blocked
-      window.speechSynthesis.cancel() // clear any queued speech first
+      utterance.onerror = () => resolve()
+      window.speechSynthesis.cancel()
       window.speechSynthesis.speak(utterance)
     })
   }
@@ -1006,6 +1015,12 @@ function App() {
     audio.currentTime = getRepeatThirtyStart(audio.currentTime)
     void audio.play()
     setStatus('Repeated last 30 seconds.')
+  }
+
+  function seekBy(deltaSec: number) {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.currentTime = Math.max(0, audio.currentTime + deltaSec)
   }
 
   function applySpeedDelta(delta: number) {
@@ -1395,37 +1410,74 @@ function App() {
         {/* ── Player ── */}
         {activeTab === 'player' && (
         <section className="panel">
-          <h2 className="player-playlist-title">{playlist.name}</h2>
+
+          {/* Saved playlist picker */}
+          {savedPlaylists.length > 0 && (
+            <div className="player-playlist-picker">
+              <select
+                value={playlist.id}
+                onChange={(e) => {
+                  const found = savedPlaylists.find((p) => p.id === e.target.value)
+                  if (found) loadSavedPlaylist(found)
+                }}
+              >
+                <option value={playlist.id} disabled={savedPlaylists.some((p) => p.id === playlist.id)}>
+                  {playlist.name}
+                </option>
+                {savedPlaylists.map((sp) => (
+                  <option key={sp.id} value={sp.id}>{sp.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
           <audio ref={audioRef} controls className="audio-player" />
-          <div className="row compact">
-            <button type="button" onClick={playFromStart}>
-              ▶ Play
-            </button>
-            <button type="button" onClick={nextSong}>
-              ⏭ Next
-            </button>
-            <button type="button" onClick={repeatSong}>
-              ↺ Repeat
-            </button>
-            <button type="button" onClick={repeatThirty}>
-              ↩ −30s
-            </button>
+
+          {/* Cue / end progress bar (timed mode) */}
+          {currentTrack && settings.wdsfTimedMode && (() => {
+            const dur = currentTrack.durationSec || 1
+            const cuePos = (currentTrack.cueStartSec / dur) * 100
+            const endSec = Math.min(dur, currentTrack.cueStartSec + currentTrack.targetPlaytimeSec)
+            const endPos = (endSec / dur) * 100
+            const fmtSec = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`
+            return (
+              <div className="cue-bar-wrap">
+                <div className="cue-bar">
+                  <div className="cue-bar-active" style={{ left: `${cuePos}%`, width: `${endPos - cuePos}%` }} />
+                  <div className="cue-bar-progress" style={{ width: `${trackProgress * 100}%` }} />
+                  <div className="cue-marker cue-marker-start" style={{ left: `${cuePos}%` }} title={`Cue: ${fmtSec(currentTrack.cueStartSec)}`} />
+                  <div className="cue-marker cue-marker-end" style={{ left: `${endPos}%` }} title={`End: ${fmtSec(endSec)}`} />
+                </div>
+                <div className="cue-bar-labels">
+                  <span>▶ {fmtSec(currentTrack.cueStartSec)}</span>
+                  <span>⏹ {fmtSec(endSec)}</span>
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Playback controls */}
+          <div className="player-controls">
+            <button type="button" className="ctrl-btn" title="Play from start" onClick={playFromStart}>▶</button>
+            <button type="button" className="ctrl-btn" title="Next track" onClick={nextSong}>⏭</button>
+            <button type="button" className="ctrl-btn" title="Restart track" onClick={repeatSong}>↺</button>
+            <button type="button" className="ctrl-btn" title="−15 seconds" onClick={() => seekBy(-15)}>−15s</button>
+            <button type="button" className="ctrl-btn" title="+15 seconds" onClick={() => seekBy(15)}>+15s</button>
           </div>
 
-          <div className="row compact speed-row">
-            <button type="button" onClick={() => applySpeedDelta(-10)}>
-              −10%
-            </button>
+          {/* Speed row */}
+          <div className="player-speed-row">
+            <button type="button" className="ctrl-btn speed-btn" onClick={() => applySpeedDelta(-10)}>−10%</button>
             <input
               type="range"
+              className="speed-slider"
               min={-50}
               max={50}
               value={settings.speedPct}
               onChange={(e) => setSettings((prev) => ({ ...prev, speedPct: clampSpeed(Number(e.target.value)) }))}
             />
-            <button type="button" onClick={() => applySpeedDelta(10)}>
-              +10%
-            </button>
+            <button type="button" className="ctrl-btn speed-btn" onClick={() => applySpeedDelta(10)}>+10%</button>
+            <span className="speed-label">{settings.speedPct > 0 ? '+' : ''}{settings.speedPct}%</span>
           </div>
 
           <div className="row compact">
@@ -1447,7 +1499,7 @@ function App() {
             </label>
           </div>
 
-          {/* Break between tracks — session-level setting, no playlist entries needed */}
+          {/* Break between tracks */}
           <h3>Break between tracks</h3>
           <div className="row compact">
             <label className="check">
@@ -1460,16 +1512,17 @@ function App() {
             </label>
           </div>
           {sessionRule.autoBreakEnabled && (
-            <div className="row compact">
+            <div className="row compact break-settings-row">
               <label>
-                Duration (s)
-                <input
-                  type="number"
-                  min={5}
-                  max={300}
+                Duration
+                <select
                   value={sessionRule.breakDurationSec}
-                  onChange={(e) => setSessionRule((prev) => ({ ...prev, breakDurationSec: Math.max(5, Math.min(300, Number(e.target.value))) }))}
-                />
+                  onChange={(e) => setSessionRule((prev) => ({ ...prev, breakDurationSec: Number(e.target.value) }))}
+                >
+                  {Array.from({ length: 24 }, (_, i) => (i + 1) * 5).map((s) => (
+                    <option key={s} value={s}>{s}s</option>
+                  ))}
+                </select>
               </label>
               <label>
                 Mode
