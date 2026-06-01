@@ -11,6 +11,11 @@ export const DANCES = [
   'Quickstep',
 ] as const
 
+export const DANCE_CATEGORIES: { label: string; dances: readonly DanceType[] }[] = [
+  { label: 'Latin',    dances: ['Samba', 'ChaCha', 'Rumba', 'Paso Doble', 'Jive'] },
+  { label: 'Standard', dances: ['Waltz', 'Tango', 'Viennese Waltz', 'Foxtrot', 'Quickstep'] },
+]
+
 export type DanceType = (typeof DANCES)[number]
 
 export type BreakMode = 'silence' | 'countdown' | 'applause'

@@ -534,6 +534,19 @@ button.cta:hover {
   gap: 12px;
 }
 
+.dance-category-group {
+  margin-bottom: 16px;
+}
+
+.dance-category-label {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #667;
+}
+
 .dance-playlist-card {
   border: 1px solid var(--line);
   border-radius: 12px;

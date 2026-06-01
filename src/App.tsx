@@ -2,6 +2,7 @@
 import './App.css'
 import {
   DANCES,
+  DANCE_CATEGORIES,
   WDSF_2025_DEFAULT_PLAYTIMES,
   type AppSettings,
   type DanceType,
@@ -563,7 +564,9 @@ function App() {
       // keep any dance playlists that weren't in this distribution (shouldn't happen but safe)
       const updatedIds = new Set(updated.map((p) => p.id))
       const kept = prev.filter((p) => !updatedIds.has(p.id))
-      return [...updated, ...kept]
+      const all = [...updated, ...kept]
+      // sort by canonical DANCES order
+      return all.sort((a, b) => DANCES.indexOf(a.name as DanceType) - DANCES.indexOf(b.name as DanceType))
     })
     const count = Object.keys(byDance).length
     setStatus(`Distributed ${source.length} track(s) into ${count} dance playlist(s) (no duplicates added).`)
@@ -1685,8 +1688,16 @@ function App() {
               Refresh
             </button>
           </div>
-          <div className="dance-playlists-grid">
-            {dancePlaylists.map((dp) => {
+          {DANCE_CATEGORIES.map((cat) => {
+            const catPlaylists = cat.dances
+              .map((d) => dancePlaylists.find((dp) => dp.name === d))
+              .filter(Boolean) as Playlist[]
+            if (!catPlaylists.length) return null
+            return (
+              <div key={cat.label} className="dance-category-group">
+                <h3 className="dance-category-label">{cat.label}</h3>
+                <div className="dance-playlists-grid">
+            {catPlaylists.map((dp) => {
               const color = DANCE_COLORS[dp.name as DanceType] ?? '#555'
               const isOpen = openDanceCards.has(dp.id) || dp.name === activeDanceType
               return (
@@ -1810,7 +1821,10 @@ function App() {
                 </details>
               )
             })}
-          </div>
+                </div>
+              </div>
+            )
+          })}
         </section>
       )}
 
