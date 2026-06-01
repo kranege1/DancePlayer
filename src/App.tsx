@@ -25,15 +25,22 @@ interface SpeechRecognitionEventLike {
   results: ArrayLike<ArrayLike<SpeechResultItem>>
 }
 
+interface SpeechRecognitionErrorEventLike {
+  error: string
+}
+
 interface SpeechRecognitionLike {
   lang: string
   interimResults: boolean
+  continuous: boolean
   maxAlternatives: number
   onresult: ((event: SpeechRecognitionEventLike) => void) | null
-  onerror: (() => void) | null
+  onspeechstart: (() => void) | null
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null
   onend: (() => void) | null
   start: () => void
   stop: () => void
+  abort: () => void
 }
 
 type SpeechConstructor = new () => SpeechRecognitionLike
@@ -152,6 +159,8 @@ function App() {
   const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>([])
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  // Tracks whether the user *intends* listening to stay on — used for safe auto-restart on iOS
+  const intendedListeningRef = useRef(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const activeObjectUrlRef = useRef<string | null>(null)
   const breakTimeoutRef = useRef<number | null>(null)
@@ -745,6 +754,86 @@ function App() {
     }
   }
 
+  function stopVoiceListening() {
+    intendedListeningRef.current = false
+    try { recognitionRef.current?.abort() } catch { /* ignore */ }
+    recognitionRef.current = null
+    setIsListening(false)
+  }
+
+  function startVoiceRecognition() {
+    const SpeechRecognitionCtor = (window.SpeechRecognition ?? window.webkitSpeechRecognition) as
+      | SpeechConstructor
+      | undefined
+    if (!SpeechRecognitionCtor) return
+
+    // Always cleanly abort any previous instance before creating a new one.
+    // Without this, calling start() on a still-live instance throws InvalidStateError
+    // which crashes the React event handler silently on iOS Safari PWA.
+    try { recognitionRef.current?.abort() } catch { /* ignore */ }
+    recognitionRef.current = null
+
+    const recognition = new SpeechRecognitionCtor()
+    recognition.lang = settings.language === 'de' ? 'de-DE' : 'en-US'
+    recognition.interimResults = false
+    recognition.continuous = true   // keep listening without needing button re-press
+    recognition.maxAlternatives = 1
+
+    recognition.onspeechstart = () => {
+      setStatus('Listening… speak now')
+    }
+
+    recognition.onresult = (event) => {
+      // With continuous=true, results accumulate; always read the latest one
+      const lastIndex = event.results.length - 1
+      const transcript = event.results[lastIndex]?.[0]?.transcript ?? ''
+      if (!transcript.trim()) return
+      setStatus(`Voice heard: "${transcript}"`)
+      executeVoiceCommand(transcript)
+    }
+
+    recognition.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        setStatus('Microphone access denied. Allow microphone permission in iOS Settings → Safari.')
+        intendedListeningRef.current = false
+        setIsListening(false)
+      } else if (e.error === 'no-speech') {
+        // Not a real error — no speech detected in the window; auto-restart below via onend
+        setStatus('Voice: no speech detected, still listening…')
+      } else if (e.error === 'audio-capture') {
+        setStatus('Microphone not available. Another app may be using it.')
+        intendedListeningRef.current = false
+        setIsListening(false)
+      } else {
+        setStatus(`Voice error: ${e.error}`)
+      }
+    }
+
+    recognition.onend = () => {
+      // iOS Safari does not honour continuous=true — it stops after each utterance.
+      // Auto-restart as long as the user hasn't explicitly stopped.
+      if (intendedListeningRef.current) {
+        // Small delay avoids tight restart loops on iOS
+        window.setTimeout(() => {
+          if (intendedListeningRef.current) startVoiceRecognition()
+        }, 200)
+      } else {
+        setIsListening(false)
+      }
+    }
+
+    recognitionRef.current = recognition
+    try {
+      recognition.start()
+      setIsListening(true)
+      setStatus('Voice listening active — speak a command')
+    } catch (err) {
+      setStatus(`Could not start voice recognition: ${err instanceof Error ? err.message : String(err)}`)
+      intendedListeningRef.current = false
+      setIsListening(false)
+    }
+  }
+
   function toggleVoiceListening() {
     if (!window.isSecureContext) {
       setStatus(
@@ -762,29 +851,14 @@ function App() {
       return
     }
 
-    if (isListening) {
-      recognitionRef.current?.stop()
-      setIsListening(false)
+    if (intendedListeningRef.current) {
+      stopVoiceListening()
+      setStatus('Voice listening stopped.')
       return
     }
 
-    const recognition = new SpeechRecognitionCtor()
-    recognition.lang = settings.language === 'de' ? 'de-DE' : 'en-US'
-    recognition.interimResults = false
-    recognition.maxAlternatives = 1
-    recognition.onresult = (event) => {
-      const transcript = event.results[0]?.[0]?.transcript ?? ''
-      setStatus(`Voice heard: ${transcript}`)
-      executeVoiceCommand(transcript)
-    }
-    recognition.onerror = () => {
-      setStatus('Voice recognition error. Ensure microphone permission is granted.')
-      setIsListening(false)
-    }
-    recognition.onend = () => setIsListening(false)
-    recognitionRef.current = recognition
-    recognition.start()
-    setIsListening(true)
+    intendedListeningRef.current = true
+    startVoiceRecognition()
   }
 
   return (
