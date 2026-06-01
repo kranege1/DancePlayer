@@ -549,7 +549,11 @@ button.cta:hover {
   justify-content: space-between;
   padding: 8px 12px;
   color: #fff;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
 }
+.dance-playlist-card-header::-webkit-details-marker { display: none; }
 
 .dance-playlist-card-title {
   font-weight: 700;

@@ -154,6 +154,7 @@ function App() {
   const [trackProgress, setTrackProgress] = useState(0) // 0–1
   const [previewingTrackId, setPreviewingTrackId] = useState<string | null>(null)
   const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null)
+  const [openDanceCards, setOpenDanceCards] = useState<Set<string>>(new Set())
 
   const [fileMap, setFileMap] = useState<Record<string, File | undefined>>({})
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set())
@@ -242,6 +243,12 @@ function App() {
   }, [playlist.entries])
 
   const currentIndex = playableEntries.findIndex((entry) => entry.id === activeEntryId)
+
+  const activeDanceType = useMemo(() => {
+    const entry = playlist.entries.find((e) => e.id === activeEntryId)
+    if (!entry || entry.type !== 'track') return null
+    return tracksById[entry.trackId]?.danceType ?? null
+  }, [activeEntryId, playlist.entries, tracksById])
   // currentEntry/currentTrack removed (shown via pq-active row in Player tab)
   // currentTrack removed (now shown via pq-active row in Player tab)
 
@@ -1681,12 +1688,25 @@ function App() {
           <div className="dance-playlists-grid">
             {dancePlaylists.map((dp) => {
               const color = DANCE_COLORS[dp.name as DanceType] ?? '#555'
+              const isOpen = openDanceCards.has(dp.id) || dp.name === activeDanceType
               return (
-                <div key={dp.id} className="dance-playlist-card">
-                  <div className="dance-playlist-card-header" style={{ background: color }}>
+                <details
+                  key={dp.id}
+                  className="dance-playlist-card"
+                  open={isOpen}
+                  onToggle={(e) => {
+                    const opened = (e.currentTarget as HTMLDetailsElement).open
+                    setOpenDanceCards((prev) => {
+                      const next = new Set(prev)
+                      if (opened) next.add(dp.id); else next.delete(dp.id)
+                      return next
+                    })
+                  }}
+                >
+                  <summary className="dance-playlist-card-header" style={{ background: color }}>
                     <span className="dance-playlist-card-title">{dp.name}</span>
                     <span className="dance-playlist-card-count">{dp.entries.length} track{dp.entries.length !== 1 ? 's' : ''}</span>
-                  </div>
+                  </summary>
                   <div className="dance-playlist-tracks">
                     {dp.entries.map((entry, idx) => {
                       if (entry.type !== 'track') return null
@@ -1787,7 +1807,7 @@ function App() {
                       Add all to playlist
                     </button>
                   </div>
-                </div>
+                </details>
               )
             })}
           </div>
