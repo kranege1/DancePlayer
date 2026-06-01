@@ -444,3 +444,188 @@ button.cta:hover {
     border-radius: 12px;
   }
 }
+
+/* ── Dance type badge (coloured pill) ── */
+.dance-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: #fff;
+  white-space: nowrap;
+  flex-shrink: 0;
+  letter-spacing: 0.03em;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+
+/* ── Playlist item with dance badge ── */
+.playlist-item-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+
+.playlist-item-title {
+  font-weight: 600;
+  font-size: 0.88rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.playlist-item-artist {
+  font-size: 0.78rem;
+  color: #6b7f8a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  max-width: 120px;
+}
+
+/* ── Distribute button ── */
+.distribute-btn {
+  margin-left: auto;
+}
+
+/* ── Dance Playlists section ── */
+.dance-playlists-section {
+  background: #fffaf0;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.dance-playlists-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.dance-playlists-header h2 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.dance-playlists-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.dance-playlist-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+}
+
+.dance-playlist-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  color: #fff;
+}
+
+.dance-playlist-card-title {
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+
+.dance-playlist-card-count {
+  font-size: 0.78rem;
+  opacity: 0.9;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.25);
+}
+
+.dance-playlist-tracks {
+  flex: 1;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.dance-playlist-track-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid #f0ece0;
+}
+
+.dance-playlist-track-row:last-child {
+  border-bottom: none;
+}
+
+.dance-track-num {
+  font-size: 0.72rem;
+  color: #8a9aa3;
+  min-width: 18px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.dance-track-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.dance-track-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dance-track-artist {
+  font-size: 0.74rem;
+  color: #6b7f8a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dance-playlist-card-footer {
+  padding: 8px 10px;
+  border-top: 1px solid #f0ece0;
+  background: #faf6ee;
+}
+
+.dance-playlist-card-footer button {
+  width: 100%;
+  font-size: 0.82rem;
+  padding: 6px 10px;
+}
+
+@media (max-width: 760px) {
+  .dance-playlists-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .distribute-btn {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 500px) {
+  .dance-playlists-grid {
+    grid-template-columns: 1fr;
+  }
+}

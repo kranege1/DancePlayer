@@ -49,6 +49,7 @@ const STORAGE_KEY = 'danceplayer-metadata-v1'
 interface PersistedState {
   tracks: Track[]
   playlist: Playlist
+  dancePlaylists: Playlist[]
   settings: AppSettings
   sessionRule: SessionRule
 }
@@ -94,6 +95,43 @@ function isLowConfidenceTrack(track: Track) {
   return (track.analysisConfidence ?? 1) < 0.6
 }
 
+// ── Dance type colours — each dance gets a consistent colour everywhere ──
+const DANCE_COLORS: Record<DanceType, string> = {
+  Samba: '#e67e00',
+  ChaCha: '#c0392b',
+  Rumba: '#8e44ad',
+  'Paso Doble': '#b8860b',
+  Jive: '#d81b8a',
+  Waltz: '#1565c0',
+  Tango: '#37474f',
+  'Viennese Waltz': '#00897b',
+  Foxtrot: '#2e7d32',
+  Quickstep: '#f57c00',
+}
+
+// Strip leading track-number prefixes and trailing dance/BPM annotations
+function cleanDisplayTitle(raw: string): string {
+  let s = raw.trim()
+  s = s.replace(/^(\d{1,3}\.?\s*[-\u2013]?\s+|Track\s+\d+\s*[-\u2013]?\s*)/i, '')
+  s = s.replace(/[\s\-\u2013]+[\(\[]?(?:[A-Z][a-z]{0,3}\s+\d+|\d+\s*BPM|BPM\s*\d+)[\)\]]?$/i, '')
+  s = s.replace(/_/g, ' ').trim()
+  return s || raw
+}
+
+// Try to extract "Artist - Title" from a bare filename (no extension)
+function extractArtistFromFilename(filenameNoExt: string): { title: string; artist?: string } {
+  const dashMatch = filenameNoExt.match(/^(.+?)\s*[-\u2013]\s*(.+)$/)
+  if (dashMatch) {
+    const left = dashMatch[1].trim()
+    const right = dashMatch[2].trim()
+    const looksLikeDance = /\b(waltz|tango|samba|cha|rumba|paso|jive|foxtrot|quickstep|viennese)\b/i.test(left)
+    if (!looksLikeDance && left.length > 1 && right.length > 1) {
+      return { title: right, artist: left }
+    }
+  }
+  return { title: filenameNoExt }
+}
+
 function App() {
   const [tracks, setTracks] = useState<Track[]>([])
   const [playlist, setPlaylist] = useState<Playlist>(initialPlaylist)
@@ -110,6 +148,7 @@ function App() {
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null)
   const [manualBreakSec, setManualBreakSec] = useState(50)
   const [manualBreakMode, setManualBreakMode] = useState<BreakItem['mode']>('countdown')
+  const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>([])
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -124,6 +163,7 @@ function App() {
       const parsed = JSON.parse(raw) as PersistedState
       setTracks(parsed.tracks ?? [])
       setPlaylist(parsed.playlist ?? initialPlaylist)
+      setDancePlaylists(parsed.dancePlaylists ?? [])
       setSettings(parsed.settings ?? initialSettings)
       setSessionRule(parsed.sessionRule ?? initialSessionRule)
       setStatus('Metadata restored. Cached audio will load on demand from device storage.')
@@ -133,9 +173,9 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const payload: PersistedState = { tracks, playlist, settings, sessionRule }
+    const payload: PersistedState = { tracks, playlist, dancePlaylists, settings, sessionRule }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
-  }, [tracks, playlist, settings, sessionRule])
+  }, [tracks, playlist, dancePlaylists, settings, sessionRule])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -213,9 +253,10 @@ function App() {
       })
       URL.revokeObjectURL(temporaryUrl)
 
-      const title = file.name.replace(/\.[^.]+$/, '')
+      const rawName = file.name.replace(/\.[^.]+$/, '')
+      const { title, artist } = extractArtistFromFilename(rawName)
       const analysis = await analyzeTrackRhythm(file, {
-        title,
+        title: rawName,
         fileName: file.name,
       })
       const danceType = analysis.danceType
@@ -223,6 +264,7 @@ function App() {
       imported.push({
         id,
         title,
+        artist,
         danceType,
         analysisConfidence: analysis.confidence,
         hasCachedAudio: true,
@@ -313,6 +355,27 @@ function App() {
 
   function removePlaylistEntry(entryId: string) {
     setPlaylist((prev) => ({ ...prev, entries: prev.entries.filter((e) => e.id !== entryId) }))
+  }
+
+  function distributeToDancePlaylists() {
+    if (!tracks.length) return
+    const byDance: Partial<Record<DanceType, Track[]>> = {}
+    for (const track of tracks) {
+      if (!byDance[track.danceType]) byDance[track.danceType] = []
+      byDance[track.danceType]!.push(track)
+    }
+    const newPlaylists: Playlist[] = (Object.keys(byDance) as DanceType[]).map((dance) => ({
+      id: `dance-playlist-${dance}`,
+      name: dance,
+      entries: (byDance[dance] ?? []).sort(sortByTitle).map((t) => ({
+        id: createId('entry-track'),
+        type: 'track' as const,
+        trackId: t.id,
+      })),
+    }))
+    setDancePlaylists(newPlaylists)
+    const count = Object.keys(byDance).length
+    setStatus(`Distributed ${tracks.length} track(s) into ${count} dance playlist(s).`)
   }
 
   // ── FR-18 Export / Import ──────────────────────────────────────────────
@@ -755,6 +818,11 @@ function App() {
                   </button>
                 </>
               )}
+              {!importProgress && (
+                <button type="button" className="cta distribute-btn" onClick={distributeToDancePlaylists}>
+                  Distribute to dance playlists
+                </button>
+              )}
             </div>
           )}
 
@@ -953,9 +1021,19 @@ function App() {
               <div key={entry.id} className={`playlist-item ${entry.id === activeEntryId ? 'active' : ''}`}>
                 <span className="badge">{index + 1}</span>
                 <span className="playlist-item-label">
-                  {entry.type === 'track'
-                    ? `${tracksById[entry.trackId]?.title ?? 'Missing track'} — ${tracksById[entry.trackId]?.danceType ?? ''}`
-                    : `⏸ Break ${entry.breakItem.durationSec}s (${entry.breakItem.mode})`}
+                  {entry.type === 'track' ? (() => {
+                    const t = tracksById[entry.trackId]
+                    if (!t) return <span>Missing track</span>
+                    return (
+                      <span className="playlist-item-content">
+                        <span className="dance-badge" style={{ background: DANCE_COLORS[t.danceType] }}>
+                          {t.danceType}
+                        </span>
+                        <span className="playlist-item-title">{cleanDisplayTitle(t.title)}</span>
+                        {t.artist && <span className="playlist-item-artist">{t.artist}</span>}
+                      </span>
+                    )
+                  })() : `⏸ Break ${entry.breakItem.durationSec}s (${entry.breakItem.mode})`}
                 </span>
                 <button
                   type="button"
@@ -1094,6 +1172,82 @@ function App() {
           />
         </section>
       </main>
+
+      {/* ────────── DANCE PLAYLISTS SECTION ────────── */}
+      {dancePlaylists.length > 0 && (
+        <section className="dance-playlists-section">
+          <div className="dance-playlists-header">
+            <h2>Dance Playlists</h2>
+            <button
+              type="button"
+              onClick={distributeToDancePlaylists}
+              title="Re-run distribution to update playlists"
+            >
+              Refresh
+            </button>
+          </div>
+          <div className="dance-playlists-grid">
+            {dancePlaylists.map((dp) => {
+              const color = DANCE_COLORS[dp.name as DanceType] ?? '#555'
+              return (
+                <div key={dp.id} className="dance-playlist-card">
+                  <div className="dance-playlist-card-header" style={{ background: color }}>
+                    <span className="dance-playlist-card-title">{dp.name}</span>
+                    <span className="dance-playlist-card-count">{dp.entries.length} track{dp.entries.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="dance-playlist-tracks">
+                    {dp.entries.map((entry, idx) => {
+                      if (entry.type !== 'track') return null
+                      const t = tracksById[entry.trackId]
+                      if (!t) return null
+                      return (
+                        <div key={entry.id} className="dance-playlist-track-row">
+                          <span className="dance-track-num">{idx + 1}</span>
+                          <div className="dance-track-info">
+                            <span className="dance-track-title">{cleanDisplayTitle(t.title)}</span>
+                            {t.artist && <span className="dance-track-artist">{t.artist}</span>}
+                          </div>
+                          <span className="dance-badge" style={{ background: color }}>
+                            {t.danceType}
+                          </span>
+                          <button
+                            type="button"
+                            className="cta"
+                            title="Add all to active playlist"
+                            onClick={() => {
+                              const newEntries: PlaylistEntry[] = dp.entries.filter(
+                                (e): e is { id: string; type: 'track'; trackId: string } => e.type === 'track',
+                              ).map((e) => ({ id: createId('entry-track'), type: 'track' as const, trackId: e.trackId }))
+                              setPlaylist((prev) => ({ ...prev, entries: [...prev.entries, ...newEntries] }))
+                              setStatus(`Added ${newEntries.length} ${dp.name} track(s) to playlist.`)
+                            }}
+                            style={{ display: 'none' }}
+                          >+</button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <div className="dance-playlist-card-footer">
+                    <button
+                      type="button"
+                      className="cta"
+                      onClick={() => {
+                        const newEntries: PlaylistEntry[] = dp.entries
+                          .filter((e): e is { id: string; type: 'track'; trackId: string } => e.type === 'track')
+                          .map((e) => ({ id: createId('entry-track'), type: 'track' as const, trackId: e.trackId }))
+                        setPlaylist((prev) => ({ ...prev, entries: [...prev.entries, ...newEntries] }))
+                        setStatus(`Added all ${dp.entries.length} ${dp.name} track(s) to playlist.`)
+                      }}
+                    >
+                      Add all to playlist
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
     </div>
   )
 }
