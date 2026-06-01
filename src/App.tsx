@@ -1076,18 +1076,17 @@ function App() {
     recognitionRef.current = null
 
     const recognition = new SpeechRecognitionCtor()
-    // No lang lock — let the browser/OS use its default so both English and German
-    // transcription work. The parser handles both languages regardless.
+    // No lang lock — browser/OS default handles both English and German transcription.
     recognition.interimResults = false
-    recognition.continuous = false  // one-shot: stop after the command so audio is never ducked
-    recognition.maxAlternatives = 3 // try multiple alternatives to catch both EN and DE
+    recognition.continuous = true   // mic stays open the whole session
+    recognition.maxAlternatives = 3 // more alternatives → better EN+DE matching
 
     recognition.onspeechstart = () => {
       setStatus('Listening… speak now')
     }
 
     recognition.onresult = (event) => {
-      // Try all alternatives across all results to find a recognized command
+      // Try all alternatives to find a recognized command (covers EN and DE)
       for (let r = event.results.length - 1; r >= 0; r--) {
         const result = event.results[r]
         for (let a = 0; a < result.length; a++) {
@@ -1097,14 +1096,11 @@ function App() {
           if (intent.type !== 'unknown') {
             setStatus(`Voice: "${transcript}"`)
             executeVoiceCommand(transcript)
-            // Stop listening after a successful command
-            intendedListeningRef.current = false
-            try { recognition.stop() } catch { /* ignore */ }
             return
           }
         }
       }
-      // Nothing matched — show what was heard but keep listening (onend will fire and restart)
+      // Nothing matched — show what was heard, keep listening
       const last = event.results[event.results.length - 1]?.[0]?.transcript ?? ''
       setStatus(`Voice heard: "${last}" — not recognized`)
     }
@@ -1127,8 +1123,7 @@ function App() {
     }
 
     recognition.onend = () => {
-      // After a recognized command, intendedListeningRef was set false — just stop.
-      // For no-match results, restart once so the user can try again.
+      // iOS Safari stops after each utterance even with continuous=true — auto-restart.
       if (intendedListeningRef.current) {
         window.setTimeout(() => {
           if (intendedListeningRef.current) startVoiceRecognition()
