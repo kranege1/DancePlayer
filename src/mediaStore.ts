@@ -86,3 +86,9 @@ export async function removeAudioFile(trackId: string): Promise<void> {
     await requestToPromise(store.delete(trackId))
   })
 }
+
+export async function clearAllAudioFiles(): Promise<void> {
+  await withStore('readwrite', async (store) => {
+    await requestToPromise(store.clear())
+  })
+}

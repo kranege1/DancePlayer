@@ -11,9 +11,9 @@ import {
   type SessionRule,
   type Track,
 } from './types'
+import { clearAllAudioFiles, getAudioFile, saveAudioFile } from './mediaStore'
 import { parseVoiceIntent } from './voice'
 import { analyzeTrackRhythm } from './analysis'
-import { getAudioFile, saveAudioFile } from './mediaStore'
 import { getFadeWindow, getRepeatThirtyStart } from './playbackMath'
 import { lookupTrackOnMusicBrainz } from './musicbrainz'
 
@@ -1621,6 +1621,33 @@ function App() {
               Export library metadata
             </button>
           </div>
+
+          <h3>Reset</h3>
+          <p className="hint">
+            Deletes all songs, playlists, and cached audio. The app returns to its empty default
+            state. This cannot be undone.
+          </p>
+          <button
+            type="button"
+            className="btn-danger"
+            onClick={() => {
+              if (!window.confirm('Delete ALL songs, playlists and cached audio?\nThis cannot be undone.')) return
+              void clearAllAudioFiles()
+              localStorage.removeItem(STORAGE_KEY)
+              setTracks([])
+              setPlaylist(initialPlaylist)
+              setDancePlaylists([])
+              setSavedPlaylists([])
+              setSettings(initialSettings)
+              setSessionRule(initialSessionRule)
+              setSelectedTrackIds(new Set())
+              setFileMap({})
+              setActiveEntryId(null)
+              setStatus('App reset to default.')
+            }}
+          >
+            🗑 Reset app to default
+          </button>
 
           <h3>Import backup</h3>
           <p className="hint">

@@ -289,6 +289,17 @@ button.cta:hover {
   filter: brightness(1.05);
 }
 
+.btn-danger {
+  background: linear-gradient(180deg, #e53935 0%, #b71c1c 100%);
+  color: #fff;
+  border-color: #7f0000;
+  font-weight: 600;
+}
+
+.btn-danger:hover {
+  filter: brightness(1.08);
+}
+
 /* ── Import progress ── */
 .import-progress {
   margin: 8px 0;
