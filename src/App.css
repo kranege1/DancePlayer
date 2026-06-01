@@ -717,8 +717,53 @@ button.cta:hover {
   color: #a02020;
 }
 
-.remove-dance-track-btn:hover {
-  filter: brightness(0.93);
+/* ── Dance playlist track row action menu ── */
+.track-row-menu-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 1.2rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #eef2f8;
+  border: 1px solid #b0bcd0;
+  color: #445;
+  cursor: pointer;
+}
+.track-row-menu-btn:hover { background: #dce4f0; }
+
+.track-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.track-row-actions button {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #eef2f8;
+  border: 1px solid #b0bcd0;
+  color: #334;
+  cursor: pointer;
+}
+.track-row-actions button:hover { filter: brightness(0.93); }
+.track-row-actions button.previewing {
+  background: linear-gradient(180deg, #fff0d0 0%, #ffd88a 100%);
+  border-color: #cc8800;
+  color: #7a4400;
 }
 
 .playlist-hint {

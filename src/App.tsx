@@ -153,6 +153,7 @@ function App() {
   const [_breakSecondsLeft, setBreakSecondsLeft] = useState<number | null>(null)
   const [trackProgress, setTrackProgress] = useState(0) // 0–1
   const [previewingTrackId, setPreviewingTrackId] = useState<string | null>(null)
+  const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null)
 
   const [fileMap, setFileMap] = useState<Record<string, File | undefined>>({})
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set())
@@ -524,9 +525,12 @@ function App() {
   }
 
   function distributeToDancePlaylists() {
-    if (!tracks.length) return
+    const source = selectedTrackIds.size > 0
+      ? tracks.filter((t) => selectedTrackIds.has(t.id))
+      : tracks
+    if (!source.length) return
     const byDance: Partial<Record<DanceType, Track[]>> = {}
-    for (const track of tracks) {
+    for (const track of source) {
       if (!byDance[track.danceType]) byDance[track.danceType] = []
       byDance[track.danceType]!.push(track)
     }
@@ -555,7 +559,7 @@ function App() {
       return [...updated, ...kept]
     })
     const count = Object.keys(byDance).length
-    setStatus(`Distributed ${tracks.length} track(s) into ${count} dance playlist(s) (no duplicates added).`)
+    setStatus(`Distributed ${source.length} track(s) into ${count} dance playlist(s) (no duplicates added).`)
   }
 
   // ── FR-18 Export / Import ──────────────────────────────────────────────
@@ -1199,7 +1203,9 @@ function App() {
               )}
               {!importProgress && (
                 <button type="button" className="cta distribute-btn" onClick={distributeToDancePlaylists}>
-                  Distribute to dance playlists
+                  {selectedTrackIds.size > 0
+                    ? `Distribute ${selectedTrackIds.size} selected`
+                    : 'Distribute all to dance playlists'}
                 </button>
               )}
             </div>
@@ -1693,39 +1699,53 @@ function App() {
                             <span className="dance-track-title">{cleanDisplayTitle(t.title)}</span>
                             <span className="dance-track-artist">{t.artist ?? '\u00a0'}</span>
                           </div>
-                          <button
-                            type="button"
-                            className={`preview-btn${previewingTrackId === entry.trackId ? ' previewing' : ''}`}
-                            title={previewingTrackId === entry.trackId ? 'Stop preview' : 'Preview track'}
-                            onClick={(e) => { e.stopPropagation(); void togglePreview(entry.trackId) }}
-                          >{previewingTrackId === entry.trackId ? '■' : '▶'}</button>
-                          <button
-                            type="button"
-                            className="add-one-btn"
-                            title="Add to queue"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setPlaylist((prev) => ({
-                                ...prev,
-                                entries: [...prev.entries, { id: createId('entry-track'), type: 'track' as const, trackId: entry.trackId }],
-                              }))
-                              setStatus(`Added \u201c${t.title}\u201d to playlist.`)
-                            }}
-                          >+</button>
-                          <button
-                            type="button"
-                            className="remove-dance-track-btn"
-                            title="Remove from dance playlist"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setDancePlaylists((prev) => prev.map((p) =>
-                                p.id === dp.id
-                                  ? { ...p, entries: p.entries.filter((en) => en.id !== entry.id) }
-                                  : p
-                              ))
-                              setStatus(`Removed \u201c${t.title}\u201d from ${dp.name}.`)
-                            }}
-                          >✕</button>
+                          {expandedEntryId === entry.id ? (
+                            <div className="track-row-actions">
+                              <button
+                                type="button"
+                                className={previewingTrackId === entry.trackId ? 'previewing' : ''}
+                                title={previewingTrackId === entry.trackId ? 'Stop preview' : 'Preview'}
+                                onClick={(e) => { e.stopPropagation(); void togglePreview(entry.trackId) }}
+                              >{previewingTrackId === entry.trackId ? '■' : '▶'}</button>
+                              <button
+                                type="button"
+                                title="Add to queue"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setPlaylist((prev) => ({
+                                    ...prev,
+                                    entries: [...prev.entries, { id: createId('entry-track'), type: 'track' as const, trackId: entry.trackId }],
+                                  }))
+                                  setStatus(`Added \u201c${t.title}\u201d to playlist.`)
+                                  setExpandedEntryId(null)
+                                }}
+                              >+</button>
+                              <button
+                                type="button"
+                                title="Remove from dance playlist"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setDancePlaylists((prev) => prev.map((p) =>
+                                    p.id === dp.id
+                                      ? { ...p, entries: p.entries.filter((en) => en.id !== entry.id) }
+                                      : p
+                                  ))
+                                  setStatus(`Removed \u201c${t.title}\u201d from ${dp.name}.`)
+                                  setExpandedEntryId(null)
+                                }}
+                              >✕</button>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setExpandedEntryId(null) }}
+                              >✕ close</button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              className="track-row-menu-btn"
+                              onClick={(e) => { e.stopPropagation(); setExpandedEntryId(entry.id) }}
+                            >⋯</button>
+                          )}
                           <details className="track-details dance-track-edit" onClick={(e) => e.stopPropagation()}>
                             <summary title="Edit title / artist">✎</summary>
                             <div className="row compact">
