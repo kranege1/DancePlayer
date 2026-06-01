@@ -474,6 +474,16 @@ function App() {
     setPlaylist((prev) => ({ ...prev, entries: prev.entries.filter((e) => e.id !== entryId) }))
   }
 
+  function moveCurrentEntry(fromIndex: number, dir: -1 | 1) {
+    const toIndex = fromIndex + dir
+    setPlaylist((prev) => {
+      if (toIndex < 0 || toIndex >= prev.entries.length) return prev
+      const entries = [...prev.entries]
+      ;[entries[fromIndex], entries[toIndex]] = [entries[toIndex], entries[fromIndex]]
+      return { ...prev, entries }
+    })
+  }
+
   async function togglePreview(trackId: string) {
     const pa = previewAudioRef.current
     // Stop any running preview
@@ -512,16 +522,20 @@ function App() {
       setStatus('Give your playlist a name before saving.')
       return
     }
+    const toSave = { ...playlist, name: playlist.name.trim() }
     setSavedPlaylists((prev) => {
-      const exists = prev.findIndex((p) => p.id === playlist.id)
+      const exists = prev.findIndex((p) => p.id === toSave.id)
       if (exists >= 0) {
         const next = [...prev]
-        next[exists] = { ...playlist }
+        next[exists] = toSave
         return next
       }
-      return [...prev, { ...playlist }]
+      return [...prev, toSave]
     })
-    setStatus(`Playlist "${playlist.name}" saved.`)
+    // Reset the working playlist so it's ready for a new one
+    setPlaylist({ ...initialPlaylist, id: crypto.randomUUID() })
+    setActiveEntryId(null)
+    setStatus(`Playlist "${toSave.name}" saved.`)
   }
 
   function loadSavedPlaylist(p: Playlist) {
@@ -1369,6 +1383,53 @@ function App() {
               New
             </button>
           </div>
+
+          {/* ── Current working playlist entries ── */}
+          {playlist.entries.length > 0 && (
+            <div className="current-playlist-entries">
+              {playlist.entries.map((entry, idx) => {
+                if (entry.type === 'break') return (
+                  <div key={entry.id} className="qe-row qe-break">
+                    <span className="qe-num">{idx + 1}</span>
+                    <span className="qe-label">⏸ Break {entry.breakItem.durationSec}s</span>
+                    <div className="qe-actions">
+                      <button type="button" onClick={() => moveCurrentEntry(idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
+                      <button type="button" onClick={() => moveCurrentEntry(idx, 1)} disabled={idx === playlist.entries.length - 1} aria-label="Move down">↓</button>
+                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
+                    </div>
+                  </div>
+                )
+                const t = tracksById[entry.trackId]
+                if (!t) return (
+                  <div key={entry.id} className="qe-row qe-missing">
+                    <span className="qe-num">{idx + 1}</span>
+                    <span className="qe-label">Missing track</span>
+                    <div className="qe-actions">
+                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)}>✕</button>
+                    </div>
+                  </div>
+                )
+                return (
+                  <div key={entry.id} className="qe-row">
+                    <span className="qe-num">{idx + 1}</span>
+                    <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }}>{t.danceType}</span>
+                    <span className="qe-info">
+                      <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
+                      {t.artist && <span className="qe-artist">{t.artist}</span>}
+                    </span>
+                    <div className="qe-actions">
+                      <button type="button" onClick={() => moveCurrentEntry(idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
+                      <button type="button" onClick={() => moveCurrentEntry(idx, 1)} disabled={idx === playlist.entries.length - 1} aria-label="Move down">↓</button>
+                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
+                    </div>
+                  </div>
+                )
+              })}
+              <p className="hint" style={{ margin: '6px 0 0' }}>
+                {playlist.entries.filter(e => e.type === 'track').length} track(s) — click <strong>Save</strong> to store and clear
+              </p>
+            </div>
+          )}
 
           {/* ── Saved playlists ── */}
           {savedPlaylists.length > 0 && (
