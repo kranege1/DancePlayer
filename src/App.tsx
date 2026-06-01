@@ -157,7 +157,8 @@ function App() {
   const [isListening, setIsListening] = useState(false)
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null)
   const [repeatAnnounce, setRepeatAnnounce] = useState('')
-  const [_breakSecondsLeft, setBreakSecondsLeft] = useState<number | null>(null)
+  const [breakSecondsLeft, setBreakSecondsLeft] = useState<number | null>(null)
+  const [breakInfo, setBreakInfo] = useState<{ mode: SessionRule['breakMode']; totalSec: number } | null>(null)
   const [trackProgress, setTrackProgress] = useState(0) // 0–1
   const [previewingTrackId, setPreviewingTrackId] = useState<string | null>(null)
   const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null)
@@ -175,6 +176,7 @@ function App() {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   // Tracks whether the user *intends* listening to stay on — used for safe auto-restart on iOS
   const intendedListeningRef = useRef(false)
+  const sessionRuleRef = useRef<SessionRule>(initialSessionRule)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const previewAudioRef = useRef<HTMLAudioElement>(new Audio())
   const previewObjectUrlRef = useRef<string | null>(null)
@@ -206,6 +208,7 @@ function App() {
   useEffect(() => {
     const payload: PersistedState = { tracks, playlist, dancePlaylists, savedPlaylists, settings, sessionRule }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+    sessionRuleRef.current = sessionRule
   }, [tracks, playlist, dancePlaylists, savedPlaylists, settings, sessionRule])
 
   useEffect(() => {
@@ -660,6 +663,7 @@ function App() {
   function runBreakThenAdvance(nextIndex: number, rule: SessionRule) {
     const dur = Math.max(5, Math.min(300, rule.breakDurationSec))
     setBreakSecondsLeft(dur)
+    setBreakInfo({ mode: rule.breakMode, totalSec: dur })
     setStatus(`Break: ${dur}s (${rule.breakMode})`)
 
     // Stop any running audio
@@ -685,6 +689,7 @@ function App() {
     breakTimeoutRef.current = window.setTimeout(() => {
       if (breakTickRef.current) { window.clearInterval(breakTickRef.current); breakTickRef.current = null }
       setBreakSecondsLeft(null)
+      setBreakInfo(null)
       void playEntryByIndex(nextIndex)
     }, dur * 1000)
   }
@@ -811,6 +816,7 @@ function App() {
     applauseAudioRefs.current = []
     if (breakAudioCtxRef.current) { void breakAudioCtxRef.current.close(); breakAudioCtxRef.current = null }
     setBreakSecondsLeft(null)
+    setBreakInfo(null)
     setTrackProgress(0)
   }
 
@@ -942,8 +948,9 @@ function App() {
           if (audio.currentTime >= fadeWindow.end) {
             audio.pause()
             audio.volume = 1
-            if (sessionRule.autoBreakEnabled) {
-              runBreakThenAdvance(index + 1, sessionRule)
+            const rule = sessionRuleRef.current
+            if (rule.autoBreakEnabled) {
+              runBreakThenAdvance(index + 1, rule)
             } else {
               void playEntryByIndex(index + 1)
             }
@@ -957,8 +964,9 @@ function App() {
     }
 
     audio.onended = () => {
-      if (sessionRule.autoBreakEnabled) {
-        runBreakThenAdvance(index + 1, sessionRule)
+      const rule = sessionRuleRef.current
+      if (rule.autoBreakEnabled) {
+        runBreakThenAdvance(index + 1, rule)
       } else {
         void playEntryByIndex(index + 1)
       }
@@ -1440,8 +1448,26 @@ function App() {
 
           <audio ref={audioRef} controls className="audio-player" />
 
-          {/* Now-playing strip */}
-          {currentTrack ? (
+          {/* Now-playing strip — shows track OR break info */}
+          {breakInfo ? (
+            <div className="now-playing-strip now-playing-break">
+              <div className="now-playing-info">
+                <span className="now-playing-title">
+                  {breakInfo.mode === 'applause' ? '👏 Applause break' : breakInfo.mode === 'countdown' ? '⏳ Countdown break' : '🔇 Silence break'}
+                </span>
+                <span className="now-playing-artist">
+                  {breakSecondsLeft !== null ? `${breakSecondsLeft}s remaining` : '…'}
+                </span>
+                <div className="now-playing-breakbar">
+                  <div
+                    className="now-playing-breakbar-fill"
+                    style={{ width: `${breakSecondsLeft !== null ? (breakSecondsLeft / breakInfo.totalSec) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+              <span className="now-playing-break-badge">{breakInfo.totalSec}s</span>
+            </div>
+          ) : currentTrack ? (
             <div className="now-playing-strip">
               <div className="now-playing-info">
                 <span className="now-playing-title">{cleanDisplayTitle(currentTrack.title)}</span>

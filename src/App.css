@@ -1068,6 +1068,34 @@ button.cta:hover {
   font-style: italic;
   justify-content: center;
 }
+.now-playing-strip.now-playing-break {
+  background: #fff8e1;
+  border-color: #f0c040;
+}
+.now-playing-breakbar {
+  height: 6px;
+  border-radius: 3px;
+  background: #f0e0a0;
+  margin-top: 5px;
+  overflow: hidden;
+  width: 100%;
+}
+.now-playing-breakbar-fill {
+  height: 100%;
+  background: #f0c040;
+  border-radius: 3px;
+  transition: width 0.5s linear;
+}
+.now-playing-break-badge {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #b8860b;
+  background: #fde68a;
+  border-radius: 999px;
+  padding: 3px 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .now-playing-info {
   display: flex;
   flex-direction: column;
