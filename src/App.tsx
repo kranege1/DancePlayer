@@ -1109,10 +1109,17 @@ function App() {
         {activeTab === 'songs' && (
         <section className="panel">
           <h2>Library</h2>
-          <label className="file-label" htmlFor="music-files">
-            Import mp3 / wav / aac / m4a / aiff
-          </label>
+          <div className="import-buttons">
+            <label className="file-label" htmlFor="music-files">
+              Import files
+            </label>
+            <label className="file-label folder-label" htmlFor="music-folder">
+              Import folder
+            </label>
+          </div>
           <input id="music-files" type="file" multiple accept=".mp3,.wav,.aac,.m4a,.aiff" onChange={handleImport} />
+          {/* webkitdirectory picks a folder incl. all subfolders; no accept= needed as we filter in handler */}
+          <input id="music-folder" type="file" multiple onChange={handleImport} {...{ webkitdirectory: '', mozdirectory: '' } as React.InputHTMLAttributes<HTMLInputElement>} />
 
           {importProgress && (
             <div className="import-progress">

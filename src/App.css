@@ -124,9 +124,30 @@ button.live {
   background: #dcf3e8;
 }
 
+.import-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
 .file-label {
   display: inline-block;
-  margin-bottom: 8px;
+  padding: 7px 14px;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #e8f0fe 0%, #c8d8fc 100%);
+  border: 1px solid #7a9ee0;
+  color: #1a3a7a;
+  font-size: 0.9rem;
+  cursor: pointer;
+  user-select: none;
+}
+.file-label:hover { filter: brightness(0.95); }
+
+.folder-label {
+  background: linear-gradient(180deg, #e8f4ee 0%, #c8e8d8 100%);
+  border-color: #6dbb8a;
+  color: #1a5a3a;
 }
 
 .track-list,
