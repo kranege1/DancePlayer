@@ -212,10 +212,22 @@ function App() {
     return Object.fromEntries(tracks.map((track) => [track.id, track]))
   }, [tracks])
 
+  // IDs of tracks already placed into dance playlists — they leave the Songs staging area
+  const distributedTrackIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const dp of dancePlaylists) {
+      for (const entry of dp.entries) {
+        if (entry.type === 'track') ids.add(entry.trackId)
+      }
+    }
+    return ids
+  }, [dancePlaylists])
+
   const visibleTracks = useMemo(() => {
-    if (libraryFilter === 'All') return tracks
-    return tracks.filter((t) => t.danceType === libraryFilter)
-  }, [tracks, libraryFilter])
+    const base = libraryFilter === 'All' ? tracks : tracks.filter((t) => t.danceType === libraryFilter)
+    // Hide tracks already distributed — Songs tab is a staging area for new imports only
+    return base.filter((t) => !distributedTrackIds.has(t.id))
+  }, [tracks, libraryFilter, distributedTrackIds])
 
   const playableEntries = useMemo(() => {
     return playlist.entries
@@ -937,6 +949,12 @@ function App() {
           )}
 
           {/* Track list */}
+          {visibleTracks.length === 0 && tracks.length > 0 && (
+            <p className="all-distributed-msg">
+              ✓ All {tracks.length} song{tracks.length !== 1 ? 's' : ''} are in Dance Playlists.{' '}
+              Go to <strong>Playlists</strong> to build your session, or import more songs here.
+            </p>
+          )}
           <div className="track-list">
             {visibleTracks.map((track) => (
               <div
@@ -987,6 +1005,25 @@ function App() {
                 {/* Collapsed edit controls */}
                 <details className="track-details" onClick={(e) => e.stopPropagation()}>
                   <summary>Edit</summary>
+                  <div className="row compact">
+                    <label>
+                      Title
+                      <input
+                        type="text"
+                        value={track.title}
+                        onChange={(e) => updateTrack(track.id, { title: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Artist
+                      <input
+                        type="text"
+                        value={track.artist ?? ''}
+                        placeholder="Artist name"
+                        onChange={(e) => updateTrack(track.id, { artist: e.target.value || undefined })}
+                      />
+                    </label>
+                  </div>
                   <div className="row compact">
                     <label>
                       Cue (s)
@@ -1322,24 +1359,43 @@ function App() {
                           <span className="dance-track-num">{idx + 1}</span>
                           <div className="dance-track-info">
                             <span className="dance-track-title">{cleanDisplayTitle(t.title)}</span>
-                            {t.artist && <span className="dance-track-artist">{t.artist}</span>}
+                            <span className="dance-track-artist">{t.artist ?? '\u00a0'}</span>
                           </div>
-                          <span className="dance-badge" style={{ background: color }}>
-                            {t.danceType}
-                          </span>
                           <button
                             type="button"
-                            className="cta"
-                            title="Add all to active playlist"
-                            onClick={() => {
-                              const newEntries: PlaylistEntry[] = dp.entries.filter(
-                                (e): e is { id: string; type: 'track'; trackId: string } => e.type === 'track',
-                              ).map((e) => ({ id: createId('entry-track'), type: 'track' as const, trackId: e.trackId }))
-                              setPlaylist((prev) => ({ ...prev, entries: [...prev.entries, ...newEntries] }))
-                              setStatus(`Added ${newEntries.length} ${dp.name} track(s) to playlist.`)
+                            className="add-one-btn"
+                            title="Add to playlist"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setPlaylist((prev) => ({
+                                ...prev,
+                                entries: [...prev.entries, { id: createId('entry-track'), type: 'track' as const, trackId: entry.trackId }],
+                              }))
+                              setStatus(`Added \u201c${t.title}\u201d to playlist.`)
                             }}
-                            style={{ display: 'none' }}
                           >+</button>
+                          <details className="track-details dance-track-edit" onClick={(e) => e.stopPropagation()}>
+                            <summary title="Edit title / artist">✎</summary>
+                            <div className="row compact">
+                              <label>
+                                Title
+                                <input
+                                  type="text"
+                                  value={t.title}
+                                  onChange={(e) => updateTrack(t.id, { title: e.target.value })}
+                                />
+                              </label>
+                              <label>
+                                Artist
+                                <input
+                                  type="text"
+                                  value={t.artist ?? ''}
+                                  placeholder="Artist name"
+                                  onChange={(e) => updateTrack(t.id, { artist: e.target.value || undefined })}
+                                />
+                              </label>
+                            </div>
+                          </details>
                         </div>
                       )
                     })}

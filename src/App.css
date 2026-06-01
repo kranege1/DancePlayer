@@ -622,6 +622,66 @@ button.cta:hover {
   }
 }
 
+/* ── Songs tab: all-distributed notice ── */
+.all-distributed-msg {
+  margin: 16px 0 8px;
+  padding: 14px 16px;
+  background: #edf8f2;
+  border: 1px dashed #6dbb8a;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  color: #2e6b4a;
+  text-align: center;
+}
+
+/* ── Dance playlist per-track + button ── */
+.add-one-btn {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #e8f4ee 0%, #c8e8d8 100%);
+  border: 1px solid #6dbb8a;
+  color: #1a6b3a;
+}
+
+.add-one-btn:hover {
+  filter: brightness(0.95);
+}
+
+/* ── Dance playlist per-track edit (✎) ── */
+.dance-track-edit {
+  flex-shrink: 0;
+}
+
+.dance-track-edit > summary {
+  cursor: pointer;
+  font-size: 0.95rem;
+  opacity: 0.55;
+  padding: 2px 4px;
+  list-style: none;
+  border-radius: 4px;
+  user-select: none;
+}
+
+.dance-track-edit > summary::-webkit-details-marker { display: none; }
+
+.dance-track-edit > summary:hover {
+  opacity: 1;
+  background: #f0ece0;
+}
+
+.dance-track-edit > .row {
+  margin: 6px 0 2px;
+}
+
 /* ── Bottom tab navigation ── */
 .tab-bar {
   position: fixed;
