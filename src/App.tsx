@@ -157,6 +157,7 @@ function App() {
   const [manualBreakSec, setManualBreakSec] = useState(50)
   const [manualBreakMode, setManualBreakMode] = useState<BreakItem['mode']>('countdown')
   const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>([])
+  const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('songs')
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   // Tracks whether the user *intends* listening to stay on — used for safe auto-restart on iOS
@@ -876,8 +877,9 @@ function App() {
         </div>
       </header>
 
-      <main className="grid">
-        {/* ────────── LIBRARY PANEL ────────── */}
+      <main className="tab-content">
+        {/* ── Songs ── */}
+        {activeTab === 'songs' && (
         <section className="panel">
           <h2>Library</h2>
           <label className="file-label" htmlFor="music-files">
@@ -1021,8 +1023,10 @@ function App() {
             ))}
           </div>
         </section>
+        )}
 
-        {/* ────────── PLAYLIST PANEL ────────── */}
+        {/* ── Playlists ── */}
+        {activeTab === 'playlists' && (
         <section className="panel">
           <div className="playlist-topbar">
             <h2>Playlist</h2>
@@ -1155,8 +1159,10 @@ function App() {
             ))}
           </div>
         </section>
+        )}
 
-        {/* ────────── PLAYER PANEL ────────── */}
+        {/* ── Player ── */}
+        {activeTab === 'player' && (
         <section className="panel">
           <h2>Player</h2>
           <audio ref={audioRef} controls className="audio-player" />
@@ -1245,8 +1251,10 @@ function App() {
           </p>
           {repeatAnnounce && <p className="hint">Last announcement: {repeatAnnounce}</p>}
         </section>
+        )}
 
-        {/* ────────── BACKUP PANEL ────────── */}
+        {/* ── Export ── */}
+        {activeTab === 'export' && (
         <section className="panel panel-backup">
           <h2>Backup &amp; Restore</h2>
           <p className="hint">
@@ -1279,10 +1287,11 @@ function App() {
             onChange={handleImportBackup}
           />
         </section>
+        )}
       </main>
 
-      {/* ────────── DANCE PLAYLISTS SECTION ────────── */}
-      {dancePlaylists.length > 0 && (
+      {/* ── Dance Playlists (Playlists tab) ── */}
+      {activeTab === 'playlists' && dancePlaylists.length > 0 && (
         <section className="dance-playlists-section">
           <div className="dance-playlists-header">
             <h2>Dance Playlists</h2>
@@ -1356,6 +1365,27 @@ function App() {
           </div>
         </section>
       )}
+
+      <nav className="tab-bar" role="tablist" aria-label="Main navigation">
+        {([
+          { id: 'songs',     label: 'Songs',     icon: '♫' },
+          { id: 'playlists', label: 'Playlists', icon: '☰' },
+          { id: 'player',    label: 'Player',    icon: '▶' },
+          { id: 'export',    label: 'Export',    icon: '⬆' },
+        ] as const).map(({ id, label, icon }) => (
+          <button
+            key={id}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === id}
+            className={`tab-btn${activeTab === id ? ' active' : ''}`}
+            onClick={() => setActiveTab(id)}
+          >
+            <span className="tab-icon" aria-hidden="true">{icon}</span>
+            <span className="tab-label">{label}</span>
+          </button>
+        ))}
+      </nav>
     </div>
   )
 }

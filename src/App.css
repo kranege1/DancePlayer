@@ -4,6 +4,8 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* clear space below fixed tab bar */
+  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
 }
 
 .hero {
@@ -48,9 +50,9 @@
   font-size: 0.86rem;
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.tab-content {
+  display: flex;
+  flex-direction: column;
   gap: 14px;
 }
 
@@ -417,23 +419,13 @@ button.cta:hover {
 }
 
 @media (max-width: 1100px) {
-  .grid {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .panel-backup {
-    grid-column: 1 / -1;
-  }
+  /* single-column tab layout — no overrides needed */
 }
 
 @media (max-width: 760px) {
   .app-shell {
     width: calc(100% - 16px);
     margin-top: 8px;
-  }
-
-  .grid {
-    grid-template-columns: 1fr;
   }
 
   .hero {
@@ -628,4 +620,63 @@ button.cta:hover {
   .dance-playlists-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ── Bottom tab navigation ── */
+.tab-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  background: rgba(11, 31, 42, 0.96);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  z-index: 100;
+}
+
+.tab-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 10px 4px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: rgba(255, 249, 239, 0.45);
+  cursor: pointer;
+  transition: color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tab-btn:hover {
+  filter: none;
+  color: rgba(255, 249, 239, 0.80);
+}
+
+.tab-btn.active {
+  color: #4cd8b0;
+  background: none;
+}
+
+.tab-btn.active .tab-icon {
+  transform: scale(1.12);
+}
+
+.tab-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+  transition: transform 0.15s;
+}
+
+.tab-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-weight: 500;
 }
