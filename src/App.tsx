@@ -156,7 +156,7 @@ function App() {
 
   const [fileMap, setFileMap] = useState<Record<string, File | undefined>>({})
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set())
-  const [libraryFilter, setLibraryFilter] = useState<DanceType | 'All'>('All')
+
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null)
   const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>([])
   const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>([])
@@ -232,10 +232,9 @@ function App() {
   }, [dancePlaylists])
 
   const visibleTracks = useMemo(() => {
-    const base = libraryFilter === 'All' ? tracks : tracks.filter((t) => t.danceType === libraryFilter)
     // Hide tracks already distributed — Songs tab is a staging area for new imports only
-    return base.filter((t) => !distributedTrackIds.has(t.id))
-  }, [tracks, libraryFilter, distributedTrackIds])
+    return tracks.filter((t) => !distributedTrackIds.has(t.id))
+  }, [tracks, distributedTrackIds])
 
   const playableEntries = useMemo(() => {
     return playlist.entries
@@ -1182,17 +1181,6 @@ function App() {
           {/* Filter + bulk-add toolbar */}
           {tracks.length > 0 && (
             <div className="lib-toolbar">
-              <select
-                value={libraryFilter}
-                onChange={(e) => setLibraryFilter(e.target.value as DanceType | 'All')}
-              >
-                <option value="All">All dances</option>
-                {DANCES.map((d) => (
-                  <option key={d} value={d}>
-                    {d}
-                  </option>
-                ))}
-              </select>
               <button type="button" onClick={selectAllFiltered}>
                 Select all ({visibleTracks.length})
               </button>
@@ -1550,7 +1538,6 @@ function App() {
               type="button"
               className={isListening ? 'live' : ''}
               onClick={toggleVoiceListening}
-              disabled={!window.isSecureContext}
             >
               {isListening ? '🎙 Listening…' : '🎙 Voice Command'}
             </button>
