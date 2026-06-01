@@ -182,6 +182,7 @@ function App() {
   const breakTimeoutRef = useRef<number | null>(null)
   const breakTickRef = useRef<number | null>(null)
   const breakAudioCtxRef = useRef<AudioContext | null>(null)
+  const applauseAudioRefs = useRef<HTMLAudioElement[]>([])
   const trackProgressRef = useRef<number | null>(null)
   const fadeFrameRef = useRef<number | null>(null)
 
@@ -720,73 +721,52 @@ function App() {
     setStatus(`Previewing ${track.title}. Adjust the dance in the list if needed.`)
   }
 
-  /** Plays synthesized applause or a silent keep-alive signal for the break duration. */
+  /** Plays Applause.mp3 (once at start, once near the end) or a silent keep-alive for the break. */
   function startBreakAudio(mode: 'applause' | 'silence' | 'countdown', durationSec: number) {
-    // Close any previous break audio context
+    // Stop any leftover applause from a previous break
+    applauseAudioRefs.current.forEach((a) => { a.pause(); a.src = '' })
+    applauseAudioRefs.current = []
     if (breakAudioCtxRef.current) { void breakAudioCtxRef.current.close(); breakAudioCtxRef.current = null }
     if (mode !== 'applause' && mode !== 'silence') return
 
-    try {
-      const ctx = new AudioContext()
-      void ctx.resume()
-      breakAudioCtxRef.current = ctx
-      const sr = ctx.sampleRate
-      const now = ctx.currentTime
-
-      // ── 2-second looping noise buffer (shared across layers) ──────────
-      const loopSec = 2
-      const loopBuf = ctx.createBuffer(2, Math.ceil(sr * loopSec), sr)
-      for (let ch = 0; ch < 2; ch++) {
-        const d = loopBuf.getChannelData(ch)
-        for (let i = 0; i < d.length; i++) d[i] = mode === 'applause' ? Math.random() * 2 - 1 : 0
-      }
-
-      if (mode === 'silence') {
-        // Near-zero signal keeps iOS audio session alive without audible sound
-        const src = ctx.createBufferSource()
-        src.buffer = loopBuf
-        src.loop = true
-        const g = ctx.createGain(); g.gain.value = 0.0001
-        src.connect(g); g.connect(ctx.destination)
-        src.start(now); src.stop(now + durationSec)
-        src.onended = () => void ctx.close()
-        return
-      }
-
-      // ── Applause: 4 bandpass noise layers ────────────────────────────
-      const fadeIn  = Math.min(0.8, durationSec * 0.12)
-      const fadeOut = Math.min(1.8, durationSec * 0.25)
-
-      const master = ctx.createGain()
-      master.gain.setValueAtTime(0, now)
-      master.gain.linearRampToValueAtTime(1, now + fadeIn)
-      master.gain.setValueAtTime(1, now + durationSec - fadeOut)
-      master.gain.exponentialRampToValueAtTime(0.0001, now + durationSec)
-
-      const comp = ctx.createDynamicsCompressor()
-      comp.threshold.value = -20; comp.knee.value = 8
-      comp.ratio.value = 4; comp.attack.value = 0.004; comp.release.value = 0.12
-      comp.connect(master); master.connect(ctx.destination)
-
-      // [freq, Q, level]
-      const layers: [number, number, number][] = [
-        [320,  0.5, 0.35],   // crowd murmur
-        [1100, 0.7, 0.55],   // clap body
-        [3000, 1.0, 0.45],   // clap snap / presence
-        [6500, 1.8, 0.18],   // air / hiss
-      ]
-      layers.forEach(([freq, q, level]) => {
+    if (mode === 'silence') {
+      // Near-zero WebAudio buffer keeps the iOS audio session alive without audible sound
+      try {
+        const ctx = new AudioContext()
+        void ctx.resume()
+        breakAudioCtxRef.current = ctx
+        const sr = ctx.sampleRate
+        const loopBuf = ctx.createBuffer(1, Math.ceil(sr * 2), sr) // 2-second silent loop
         const src = ctx.createBufferSource()
         src.buffer = loopBuf; src.loop = true
-        const bp = ctx.createBiquadFilter()
-        bp.type = 'bandpass'; bp.frequency.value = freq; bp.Q.value = q
-        const g = ctx.createGain(); g.gain.value = level
-        src.connect(bp); bp.connect(g); g.connect(comp)
-        src.start(now); src.stop(now + durationSec)
-      })
+        const g = ctx.createGain(); g.gain.value = 0.0001
+        src.connect(g); g.connect(ctx.destination)
+        src.start(); src.stop(ctx.currentTime + durationSec)
+        src.onended = () => void ctx.close()
+      } catch { /* AudioContext unavailable */ }
+      return
+    }
 
-      window.setTimeout(() => { void ctx.close(); breakAudioCtxRef.current = null }, (durationSec + 0.5) * 1000)
-    } catch { /* AudioContext unavailable */ }
+    // ── Applause.mp3: play once at start, once near the end ──────────
+    const playBurst = (delayMs: number) => {
+      const a = new Audio('/Applause.mp3')
+      a.volume = 1
+      applauseAudioRefs.current.push(a)
+      const t = window.setTimeout(() => {
+        void a.play().catch(() => null)
+      }, delayMs)
+      // clean up ref when done
+      a.onended = () => {
+        applauseAudioRefs.current = applauseAudioRefs.current.filter((x) => x !== a)
+      }
+      return t
+    }
+
+    playBurst(0) // immediately
+    if (durationSec > 10) {
+      // Schedule second burst 5 s before the break ends (so it finishes naturally)
+      playBurst(Math.max(0, durationSec - 5) * 1000)
+    }
   }
 
   function speak(text: string): Promise<void> {
@@ -817,6 +797,10 @@ function App() {
       cancelAnimationFrame(fadeFrameRef.current)
       fadeFrameRef.current = null
     }
+    // Stop any playing applause
+    applauseAudioRefs.current.forEach((a) => { a.pause(); a.src = '' })
+    applauseAudioRefs.current = []
+    if (breakAudioCtxRef.current) { void breakAudioCtxRef.current.close(); breakAudioCtxRef.current = null }
     setBreakSecondsLeft(null)
     setTrackProgress(0)
   }
