@@ -1,0 +1,1101 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import './App.css'
+import {
+  DANCES,
+  WDSF_2025_DEFAULT_PLAYTIMES,
+  type AppSettings,
+  type BreakItem,
+  type DanceType,
+  type Playlist,
+  type PlaylistEntry,
+  type SessionRule,
+  type Track,
+} from './types'
+import { parseVoiceIntent } from './voice'
+import { analyzeTrackRhythm } from './analysis'
+import { getAudioFile, saveAudioFile } from './mediaStore'
+import { getFadeWindow, getRepeatThirtyStart } from './playbackMath'
+
+interface SpeechResultItem {
+  transcript: string
+}
+
+interface SpeechRecognitionEventLike {
+  results: ArrayLike<ArrayLike<SpeechResultItem>>
+}
+
+interface SpeechRecognitionLike {
+  lang: string
+  interimResults: boolean
+  maxAlternatives: number
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null
+  onerror: (() => void) | null
+  onend: (() => void) | null
+  start: () => void
+  stop: () => void
+}
+
+type SpeechConstructor = new () => SpeechRecognitionLike
+
+declare global {
+  interface Window {
+    SpeechRecognition?: SpeechConstructor
+    webkitSpeechRecognition?: SpeechConstructor
+  }
+}
+
+const STORAGE_KEY = 'danceplayer-metadata-v1'
+
+interface PersistedState {
+  tracks: Track[]
+  playlist: Playlist
+  settings: AppSettings
+  sessionRule: SessionRule
+}
+
+const initialSettings: AppSettings = {
+  speedPct: 0,
+  wdsfTimedMode: true,
+  language: 'en',
+}
+
+const initialPlaylist: Playlist = {
+  id: 'playlist-main',
+  name: 'Practice Queue',
+  entries: [],
+}
+
+const initialSessionRule: SessionRule = {
+  danceType: 'Tango',
+  autoBreakEnabled: true,
+  breakDurationSec: 50,
+  announcementEnabled: true,
+}
+
+function createId(prefix: string) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function clampSpeed(value: number) {
+  return Math.max(-50, Math.min(50, value))
+}
+
+function sortByTitle(a: Track, b: Track) {
+  return a.title.localeCompare(b.title)
+}
+
+function getConfidenceLabel(confidence: number) {
+  if (confidence >= 0.8) return 'High'
+  if (confidence >= 0.6) return 'Medium'
+  return 'Low'
+}
+
+function isLowConfidenceTrack(track: Track) {
+  return (track.analysisConfidence ?? 1) < 0.6
+}
+
+function App() {
+  const [tracks, setTracks] = useState<Track[]>([])
+  const [playlist, setPlaylist] = useState<Playlist>(initialPlaylist)
+  const [settings, setSettings] = useState<AppSettings>(initialSettings)
+  const [sessionRule, setSessionRule] = useState<SessionRule>(initialSessionRule)
+  const [status, setStatus] = useState('Ready')
+  const [isListening, setIsListening] = useState(false)
+  const [activeEntryId, setActiveEntryId] = useState<string | null>(null)
+  const [repeatAnnounce, setRepeatAnnounce] = useState('')
+
+  const [fileMap, setFileMap] = useState<Record<string, File | undefined>>({})
+  const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set())
+  const [libraryFilter, setLibraryFilter] = useState<DanceType | 'All'>('All')
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null)
+  const [manualBreakSec, setManualBreakSec] = useState(50)
+  const [manualBreakMode, setManualBreakMode] = useState<BreakItem['mode']>('countdown')
+
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const activeObjectUrlRef = useRef<string | null>(null)
+  const breakTimeoutRef = useRef<number | null>(null)
+  const fadeFrameRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as PersistedState
+      setTracks(parsed.tracks ?? [])
+      setPlaylist(parsed.playlist ?? initialPlaylist)
+      setSettings(parsed.settings ?? initialSettings)
+      setSessionRule(parsed.sessionRule ?? initialSessionRule)
+      setStatus('Metadata restored. Cached audio will load on demand from device storage.')
+    } catch {
+      setStatus('Could not restore saved metadata.')
+    }
+  }, [])
+
+  useEffect(() => {
+    const payload: PersistedState = { tracks, playlist, settings, sessionRule }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
+  }, [tracks, playlist, settings, sessionRule])
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.playbackRate = 1 + settings.speedPct / 100
+  }, [settings.speedPct])
+
+  useEffect(() => {
+    return () => {
+      if (activeObjectUrlRef.current) {
+        URL.revokeObjectURL(activeObjectUrlRef.current)
+      }
+      if (breakTimeoutRef.current) {
+        window.clearTimeout(breakTimeoutRef.current)
+      }
+      if (fadeFrameRef.current) {
+        cancelAnimationFrame(fadeFrameRef.current)
+      }
+    }
+  }, [])
+
+  const tracksById = useMemo(() => {
+    return Object.fromEntries(tracks.map((track) => [track.id, track]))
+  }, [tracks])
+
+  const visibleTracks = useMemo(() => {
+    if (libraryFilter === 'All') return tracks
+    return tracks.filter((t) => t.danceType === libraryFilter)
+  }, [tracks, libraryFilter])
+
+  const playableEntries = useMemo(() => {
+    return playlist.entries
+  }, [playlist.entries])
+
+  const currentIndex = playableEntries.findIndex((entry) => entry.id === activeEntryId)
+  const currentEntry = currentIndex >= 0 ? playableEntries[currentIndex] : null
+  const currentTrack = currentEntry?.type === 'track' ? tracksById[currentEntry.trackId] : null
+
+  function updateTrack(trackId: string, update: Partial<Track>) {
+    setTracks((prev) => prev.map((track) => (track.id === trackId ? { ...track, ...update } : track)))
+  }
+
+  async function handleImport(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? [])
+    if (!files.length) return
+
+    const accepted = files.filter((file) => {
+      const name = file.name.toLowerCase()
+      return ['.mp3', '.wav', '.aac', '.m4a', '.aiff'].some((ext) => name.endsWith(ext))
+    })
+
+    if (!accepted.length) {
+      setStatus('No supported files selected (mp3, wav, aac, m4a, aiff).')
+      return
+    }
+
+    setImportProgress({ done: 0, total: accepted.length })
+
+    const imported: Track[] = []
+    const importedMap: Record<string, File | undefined> = {}
+
+    for (let i = 0; i < accepted.length; i++) {
+      const file = accepted[i]
+      setImportProgress({ done: i + 1, total: accepted.length })
+      setStatus(`Analysing ${i + 1} of ${accepted.length}: ${file.name.replace(/\.[^.]+$/, '')}`)
+
+      const id = createId('track')
+      const temporaryUrl = URL.createObjectURL(file)
+      const durationSec = await new Promise<number>((resolve) => {
+        const probe = document.createElement('audio')
+        probe.preload = 'metadata'
+        probe.src = temporaryUrl
+        probe.onloadedmetadata = () => resolve(Math.max(0, Math.round(probe.duration || 0)))
+        probe.onerror = () => resolve(0)
+      })
+      URL.revokeObjectURL(temporaryUrl)
+
+      const title = file.name.replace(/\.[^.]+$/, '')
+      const analysis = await analyzeTrackRhythm(file, {
+        title,
+        fileName: file.name,
+      })
+      const danceType = analysis.danceType
+
+      imported.push({
+        id,
+        title,
+        danceType,
+        analysisConfidence: analysis.confidence,
+        hasCachedAudio: true,
+        qualityRating: 3,
+        rhythmRating: 3,
+        durationSec,
+        cueStartSec: 0,
+        targetPlaytimeSec: WDSF_2025_DEFAULT_PLAYTIMES[danceType],
+        fadeOutSec: 3,
+      })
+      importedMap[id] = file
+
+      try {
+        await saveAudioFile(id, file)
+      } catch {
+        imported[imported.length - 1].hasCachedAudio = false
+      }
+    }
+
+    setTracks((prev) => [...prev, ...imported].sort(sortByTitle))
+    setFileMap((prev) => ({ ...prev, ...importedMap }))
+    setImportProgress(null)
+    const lowConfidenceCount = imported.filter((track) => isLowConfidenceTrack(track)).length
+    setStatus(
+      lowConfidenceCount > 0
+        ? `Imported ${imported.length} track(s). ${lowConfidenceCount} need review in the list.`
+        : `Imported ${imported.length} track(s). Dance type auto-detected from file names.`,
+    )
+    event.target.value = ''
+  }
+
+  function toggleTrackSelection(trackId: string) {
+    setSelectedTrackIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(trackId)) next.delete(trackId)
+      else next.add(trackId)
+      return next
+    })
+  }
+
+  function selectAllFiltered() {
+    const ids = visibleTracks.map((t) => t.id)
+    setSelectedTrackIds((prev) => {
+      const next = new Set(prev)
+      ids.forEach((id) => next.add(id))
+      return next
+    })
+  }
+
+  function clearSelection() {
+    setSelectedTrackIds(new Set())
+  }
+
+  function addSelectedToPlaylist() {
+    if (!selectedTrackIds.size) return
+    const newEntries: PlaylistEntry[] = Array.from(selectedTrackIds).map((trackId) => ({
+      id: createId('entry-track'),
+      type: 'track',
+      trackId,
+    }))
+    setPlaylist((prev) => ({ ...prev, entries: [...prev.entries, ...newEntries] }))
+    setStatus(`Added ${newEntries.length} track(s) to playlist.`)
+    clearSelection()
+  }
+
+  function renameCurrentPlaylist(nextName: string) {
+    const trimmed = nextName.trim()
+    if (!trimmed) return
+    setPlaylist((prev) => ({ ...prev, name: trimmed }))
+  }
+
+  function createNewPlaylist() {
+    const nextName = window.prompt('Name the new playlist:', playlist.name || '')
+    if (!nextName?.trim()) {
+      setStatus('Playlist creation cancelled. A playlist name is required.')
+      return
+    }
+
+    setPlaylist({
+      id: createId('playlist'),
+      name: nextName.trim(),
+      entries: [],
+    })
+    setActiveEntryId(null)
+    clearSelection()
+    setStatus(`Created playlist "${nextName.trim()}".`)
+  }
+
+  function removePlaylistEntry(entryId: string) {
+    setPlaylist((prev) => ({ ...prev, entries: prev.entries.filter((e) => e.id !== entryId) }))
+  }
+
+  // ── FR-18 Export / Import ──────────────────────────────────────────────
+
+  function exportPlaylist() {
+    const data = { version: 1, type: 'playlist', playlist, tracks }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `danceplayer-playlist-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    setStatus('Playlist exported. Save the file to iCloud Drive for safe-keeping.')
+  }
+
+  function exportLibrary() {
+    const data = { version: 1, type: 'library', tracks }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `danceplayer-library-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    setStatus('Library metadata exported.')
+  }
+
+  function handleImportBackup(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result as string) as {
+          version: number
+          type: string
+          tracks?: Track[]
+          playlist?: Playlist
+        }
+        if (data.type === 'playlist') {
+          if (data.tracks) setTracks((prev) => {
+            const existingIds = new Set(prev.map((t) => t.id))
+            const merged = [...prev]
+            for (const t of data.tracks!) {
+              if (!existingIds.has(t.id)) merged.push({ ...t, hasCachedAudio: false })
+            }
+            return merged.sort(sortByTitle)
+          })
+          if (data.playlist) setPlaylist(data.playlist)
+          setStatus('Playlist restored. Re-import audio files from iCloud Drive if needed.')
+        } else if (data.type === 'library') {
+          if (data.tracks) setTracks((prev) => {
+            const existingIds = new Set(prev.map((t) => t.id))
+            const merged = [...prev]
+            for (const t of data.tracks!) {
+              if (!existingIds.has(t.id)) merged.push({ ...t, hasCachedAudio: false })
+            }
+            return merged.sort(sortByTitle)
+          })
+          setStatus('Library metadata restored. Re-import audio files from iCloud Drive to enable playback.')
+        } else {
+          setStatus('Unrecognised backup file format.')
+        }
+      } catch {
+        setStatus('Could not parse backup file.')
+      }
+    }
+    reader.readAsText(file)
+    event.target.value = ''
+  }
+
+  function addManualBreak() {
+    const breakItem: BreakItem = {
+      id: createId('break'),
+      mode: manualBreakMode,
+      durationSec: Math.max(5, Math.min(50, manualBreakSec)),
+      label: `Manual ${manualBreakMode} break`,
+    }
+    setPlaylist((prev) => ({
+      ...prev,
+      entries: [...prev.entries, { id: createId('entry-break'), type: 'break', breakItem }],
+    }))
+  }
+
+  function buildSessionFromRule() {
+    const selected = tracks.filter((track) => track.danceType === sessionRule.danceType).sort(sortByTitle)
+    const entries: PlaylistEntry[] = []
+
+    selected.forEach((track, index) => {
+      entries.push({ id: createId('entry-track'), type: 'track', trackId: track.id })
+      if (sessionRule.autoBreakEnabled && index < selected.length - 1) {
+        entries.push({
+          id: createId('entry-break'),
+          type: 'break',
+          breakItem: {
+            id: createId('break'),
+            mode: 'countdown',
+            durationSec: sessionRule.breakDurationSec,
+            label: `${sessionRule.danceType} session break`,
+          },
+        })
+      }
+    })
+
+    setPlaylist((prev) => ({ ...prev, entries }))
+    setStatus(`Built session with ${selected.length} ${sessionRule.danceType} track(s).`)
+  }
+
+  function previewTrack(trackId: string) {
+    const track = tracksById[trackId]
+    const file = fileMap[trackId]
+    const audio = audioRef.current
+
+    if (!track || !file || !audio) {
+      setStatus('Preview unavailable for this track.')
+      return
+    }
+
+    clearPlaybackTimers()
+
+    if (activeObjectUrlRef.current) {
+      URL.revokeObjectURL(activeObjectUrlRef.current)
+    }
+
+    const objectUrl = URL.createObjectURL(file)
+    activeObjectUrlRef.current = objectUrl
+    audio.src = objectUrl
+    audio.volume = 1
+    audio.playbackRate = 1 + settings.speedPct / 100
+    audio.onloadedmetadata = () => {
+      audio.currentTime = Math.max(0, track.cueStartSec)
+    }
+    audio.onended = () => {
+      setStatus(`Preview finished: ${track.title}`)
+    }
+    void audio.play()
+    setStatus(`Previewing ${track.title}. Adjust the dance in the list if needed.`)
+  }
+
+  function speak(text: string) {
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.lang = settings.language === 'de' ? 'de-DE' : 'en-US'
+    window.speechSynthesis.speak(utterance)
+  }
+
+  function clearPlaybackTimers() {
+    if (breakTimeoutRef.current) {
+      window.clearTimeout(breakTimeoutRef.current)
+      breakTimeoutRef.current = null
+    }
+    if (fadeFrameRef.current) {
+      cancelAnimationFrame(fadeFrameRef.current)
+      fadeFrameRef.current = null
+    }
+  }
+
+  async function playEntryByIndex(index: number) {
+    clearPlaybackTimers()
+    const entry = playableEntries[index]
+    if (!entry) {
+      setActiveEntryId(null)
+      setStatus('Playlist finished.')
+      return
+    }
+
+    setActiveEntryId(entry.id)
+
+    if (entry.type === 'break') {
+      setStatus(`Break: ${entry.breakItem.durationSec}s (${entry.breakItem.mode})`)
+      if (entry.breakItem.mode === 'countdown') {
+        const step = 10
+        for (let t = entry.breakItem.durationSec; t >= 0; t -= step) {
+          const delay = (entry.breakItem.durationSec - t) * 1000
+          window.setTimeout(() => {
+            if (t === 0 || t === 5 || t % 10 === 0) {
+              speak(String(t))
+            }
+          }, delay)
+        }
+      }
+      breakTimeoutRef.current = window.setTimeout(() => {
+        void playEntryByIndex(index + 1)
+      }, entry.breakItem.durationSec * 1000)
+      return
+    }
+
+    const track = tracksById[entry.trackId]
+    if (!track) {
+      setStatus('Track metadata missing. Skipping.')
+      void playEntryByIndex(index + 1)
+      return
+    }
+
+    let file = fileMap[track.id]
+    if (!file) {
+      file = await getAudioFile(track.id) ?? undefined
+      if (file) {
+        setFileMap((prev) => ({ ...prev, [track.id]: file! }))
+      }
+    }
+
+    if (!file) {
+      setStatus(`Audio file for ${track.title} missing in memory. Re-import to play.`)
+      void playEntryByIndex(index + 1)
+      return
+    }
+
+    if (sessionRule.announcementEnabled) {
+      const phrase = settings.language === 'de' ? `Naechste ${track.danceType}` : `Next ${track.danceType}`
+      speak(phrase)
+      setRepeatAnnounce(phrase)
+    }
+
+    const audio = audioRef.current
+    if (!audio) return
+
+    if (activeObjectUrlRef.current) {
+      URL.revokeObjectURL(activeObjectUrlRef.current)
+    }
+
+    const objectUrl = URL.createObjectURL(file)
+    activeObjectUrlRef.current = objectUrl
+    audio.src = objectUrl
+    audio.volume = 1
+    audio.playbackRate = 1 + settings.speedPct / 100
+
+    audio.onloadedmetadata = () => {
+      const startSec = Math.max(0, track.cueStartSec)
+      audio.currentTime = startSec
+
+      if (settings.wdsfTimedMode) {
+        const fadeWindow = getFadeWindow(startSec, track.targetPlaytimeSec, track.fadeOutSec)
+
+        const tick = () => {
+          if (!audio || audio.paused) return
+          if (audio.currentTime >= fadeWindow.fadeStart && audio.currentTime <= fadeWindow.end) {
+            const remain = Math.max(0, fadeWindow.end - audio.currentTime)
+            audio.volume = Math.max(0, remain / fadeWindow.fade)
+          }
+          if (audio.currentTime >= fadeWindow.end) {
+            audio.pause()
+            audio.volume = 1
+            void playEntryByIndex(index + 1)
+            return
+          }
+          fadeFrameRef.current = requestAnimationFrame(tick)
+        }
+
+        fadeFrameRef.current = requestAnimationFrame(tick)
+      }
+    }
+
+    audio.onended = () => {
+      void playEntryByIndex(index + 1)
+    }
+    void audio.play()
+    setStatus(`Playing ${track.title} (${track.danceType})`)
+  }
+
+  function playFromStart() {
+    if (!playableEntries.length) {
+      setStatus('No playlist entries to play.')
+      return
+    }
+    void playEntryByIndex(0)
+  }
+
+  function nextSong() {
+    if (currentIndex < 0) {
+      playFromStart()
+      return
+    }
+    void playEntryByIndex(currentIndex + 1)
+  }
+
+  function playNextDance(danceType: DanceType) {
+    const searchStart = Math.max(0, currentIndex + 1)
+    const foundIndex = playableEntries.findIndex((entry, idx) => {
+      if (idx < searchStart || entry.type !== 'track') return false
+      return tracksById[entry.trackId]?.danceType === danceType
+    })
+
+    if (foundIndex >= 0) {
+      void playEntryByIndex(foundIndex)
+      return
+    }
+
+    setStatus(`No ${danceType} track found later in this playlist.`)
+  }
+
+  function repeatSong() {
+    const audio = audioRef.current
+    if (!audio || currentIndex < 0) return
+    const entry = playableEntries[currentIndex]
+    if (!entry || entry.type !== 'track') return
+    const track = tracksById[entry.trackId]
+    audio.currentTime = track?.cueStartSec ?? 0
+    void audio.play()
+    setStatus('Repeat current song.')
+  }
+
+  function repeatThirty() {
+    const audio = audioRef.current
+    if (!audio) return
+    audio.currentTime = getRepeatThirtyStart(audio.currentTime)
+    void audio.play()
+    setStatus('Repeated last 30 seconds.')
+  }
+
+  function applySpeedDelta(delta: number) {
+    setSettings((prev) => ({ ...prev, speedPct: clampSpeed(prev.speedPct + delta) }))
+  }
+
+  function executeVoiceCommand(text: string) {
+    const intent = parseVoiceIntent(text)
+    if (intent.type === 'slower') {
+      applySpeedDelta(-10)
+      setStatus('Voice: slower')
+    } else if (intent.type === 'faster') {
+      applySpeedDelta(10)
+      setStatus('Voice: faster')
+    } else if (intent.type === 'nextSong') {
+      nextSong()
+    } else if (intent.type === 'repeatSong') {
+      repeatSong()
+    } else if (intent.type === 'repeat30') {
+      repeatThirty()
+    } else if (intent.type === 'playDance') {
+      playNextDance(intent.danceType)
+    } else {
+      setStatus(`Voice not recognized: ${text}`)
+    }
+  }
+
+  function toggleVoiceListening() {
+    if (!window.isSecureContext) {
+      setStatus(
+        'Voice commands need HTTPS. Run: npm run build && npm run preview -- --host 0.0.0.0, then open https://YOUR_IP:4173 on iPhone, or use a tunnel like Cloudflare Tunnel.',
+      )
+      return
+    }
+
+    const SpeechRecognitionCtor = (window.SpeechRecognition ?? window.webkitSpeechRecognition) as
+      | SpeechConstructor
+      | undefined
+
+    if (!SpeechRecognitionCtor) {
+      setStatus('Speech recognition is unavailable in this browser.')
+      return
+    }
+
+    if (isListening) {
+      recognitionRef.current?.stop()
+      setIsListening(false)
+      return
+    }
+
+    const recognition = new SpeechRecognitionCtor()
+    recognition.lang = settings.language === 'de' ? 'de-DE' : 'en-US'
+    recognition.interimResults = false
+    recognition.maxAlternatives = 1
+    recognition.onresult = (event) => {
+      const transcript = event.results[0]?.[0]?.transcript ?? ''
+      setStatus(`Voice heard: ${transcript}`)
+      executeVoiceCommand(transcript)
+    }
+    recognition.onerror = () => {
+      setStatus('Voice recognition error. Ensure microphone permission is granted.')
+      setIsListening(false)
+    }
+    recognition.onend = () => setIsListening(false)
+    recognitionRef.current = recognition
+    recognition.start()
+    setIsListening(true)
+  }
+
+  return (
+    <div className="app-shell">
+      <header className="hero">
+        <p className="kicker">DancePlayer PWA</p>
+        <h1>Practice Engine</h1>
+        <p className="subtitle">
+          Local-first dance playback with WDSF timing, smart breaks, and English/German voice commands.
+        </p>
+        <div className="status-row">
+          <span className="status-pill">{status}</span>
+          <span className="status-pill">Speed {settings.speedPct}%</span>
+          <span className="status-pill">Mode {settings.wdsfTimedMode ? 'WDSF timed' : 'Full song'}</span>
+        </div>
+      </header>
+
+      <main className="grid">
+        {/* ────────── LIBRARY PANEL ────────── */}
+        <section className="panel">
+          <h2>Library</h2>
+          <label className="file-label" htmlFor="music-files">
+            Import mp3 / wav / aac / m4a / aiff
+          </label>
+          <input id="music-files" type="file" multiple accept=".mp3,.wav,.aac,.m4a,.aiff" onChange={handleImport} />
+
+          {importProgress && (
+            <div className="import-progress">
+              <div className="progress-bar">
+                <div
+                  className="progress-fill"
+                  style={{ width: `${Math.round((importProgress.done / importProgress.total) * 100)}%` }}
+                />
+              </div>
+              <p className="progress-label">
+                Analysing {importProgress.done} of {importProgress.total}…
+              </p>
+            </div>
+          )}
+
+          {/* Filter + bulk-add toolbar */}
+          {tracks.length > 0 && (
+            <div className="lib-toolbar">
+              <select
+                value={libraryFilter}
+                onChange={(e) => setLibraryFilter(e.target.value as DanceType | 'All')}
+              >
+                <option value="All">All dances</option>
+                {DANCES.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+              <button type="button" onClick={selectAllFiltered}>
+                Select all ({visibleTracks.length})
+              </button>
+              {selectedTrackIds.size > 0 && (
+                <>
+                  <button type="button" className="cta" onClick={addSelectedToPlaylist}>
+                    Add {selectedTrackIds.size} to playlist
+                  </button>
+                  <button type="button" onClick={clearSelection}>
+                    Clear
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Track list */}
+          <div className="track-list">
+            {visibleTracks.map((track) => (
+              <div
+                key={track.id}
+                className={`track-row ${selectedTrackIds.has(track.id) ? 'selected' : ''} ${isLowConfidenceTrack(track) ? 'needs-review' : ''}`}
+                onClick={() => toggleTrackSelection(track.id)}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedTrackIds.has(track.id)}
+                  onChange={() => toggleTrackSelection(track.id)}
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <div className="track-info">
+                  <span className="track-title">{track.title}</span>
+                  <span className="track-meta">
+                    <select
+                      value={track.danceType}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        const danceType = e.target.value as DanceType
+                        updateTrack(track.id, { danceType, targetPlaytimeSec: WDSF_2025_DEFAULT_PLAYTIMES[danceType] })
+                      }}
+                    >
+                      {DANCES.map((d) => (
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                    {track.analysisConfidence !== undefined && (
+                      <span className={`badge ${track.analysisConfidence >= 0.7 ? 'badge-ok' : 'badge-warn'}`}>
+                        {getConfidenceLabel(track.analysisConfidence)} {Math.round(track.analysisConfidence * 100)}%
+                      </span>
+                    )}
+                    {isLowConfidenceTrack(track) && <span className="badge badge-review">Review</span>}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        previewTrack(track.id)
+                      }}
+                    >
+                      Listen
+                    </button>
+                  </span>
+                </div>
+                {/* Collapsed edit controls */}
+                <details className="track-details" onClick={(e) => e.stopPropagation()}>
+                  <summary>Edit</summary>
+                  <div className="row compact">
+                    <label>
+                      Cue (s)
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        value={track.cueStartSec}
+                        onChange={(e) => updateTrack(track.id, { cueStartSec: Number(e.target.value) })}
+                      />
+                    </label>
+                    <label>
+                      Playtime (s)
+                      <input
+                        type="number"
+                        min={10}
+                        value={track.targetPlaytimeSec}
+                        onChange={(e) => updateTrack(track.id, { targetPlaytimeSec: Number(e.target.value) })}
+                      />
+                    </label>
+                    <label>
+                      Fade (s)
+                      <input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={track.fadeOutSec}
+                        onChange={(e) => updateTrack(track.id, { fadeOutSec: Number(e.target.value) })}
+                      />
+                    </label>
+                  </div>
+                </details>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ────────── PLAYLIST PANEL ────────── */}
+        <section className="panel">
+          <div className="playlist-topbar">
+            <h2>Playlist</h2>
+            <button type="button" onClick={createNewPlaylist}>
+              New playlist
+            </button>
+          </div>
+
+          <label className="playlist-name-field">
+            Playlist name
+            <input value={playlist.name} onChange={(e) => renameCurrentPlaylist(e.target.value)} />
+          </label>
+
+          {/* Session rule builder */}
+          <h3>Auto-build from session rule</h3>
+          <div className="row compact">
+            <label>
+              Dance
+              <select
+                value={sessionRule.danceType}
+                onChange={(e) => setSessionRule((prev) => ({ ...prev, danceType: e.target.value as DanceType }))}
+              >
+                {DANCES.map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Break (s)
+              <input
+                type="number"
+                min={5}
+                max={120}
+                value={sessionRule.breakDurationSec}
+                onChange={(e) => setSessionRule((prev) => ({ ...prev, breakDurationSec: Number(e.target.value) }))}
+              />
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={sessionRule.autoBreakEnabled}
+                onChange={(e) => setSessionRule((prev) => ({ ...prev, autoBreakEnabled: e.target.checked }))}
+              />
+              Auto breaks
+            </label>
+            <button type="button" onClick={buildSessionFromRule}>
+              Build
+            </button>
+          </div>
+
+          {/* Manual break inserter — playlist-level only */}
+          <h3>Insert break into playlist</h3>
+          <div className="row compact">
+            <label>
+              Duration (s)
+              <input
+                type="number"
+                min={5}
+                max={300}
+                value={manualBreakSec}
+                onChange={(e) => setManualBreakSec(Number(e.target.value))}
+              />
+            </label>
+            <label>
+              Mode
+              <select
+                value={manualBreakMode}
+                onChange={(e) => setManualBreakMode(e.target.value as BreakItem['mode'])}
+              >
+                <option value="silence">Silence</option>
+                <option value="countdown">Countdown</option>
+                <option value="applause">Applause</option>
+              </select>
+            </label>
+            <button type="button" onClick={addManualBreak}>
+              Add Break
+            </button>
+          </div>
+
+          <div className="playlist-header">
+            <h3>Queue ({playlist.entries.length})</h3>
+            {playlist.entries.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setPlaylist((prev) => ({ ...prev, entries: [] }))}
+              >
+                Clear all
+              </button>
+            )}
+          </div>
+          <div className="now-playing-banner">
+            {currentTrack ? (
+              <>
+                Now playing: <strong>{currentTrack.title}</strong> · {currentTrack.danceType}
+              </>
+            ) : (
+              'Now playing: nothing'
+            )}
+          </div>
+          <div className="playlist-list">
+            {playlist.entries.map((entry, index) => (
+              <div key={entry.id} className={`playlist-item ${entry.id === activeEntryId ? 'active' : ''}`}>
+                <span className="badge">{index + 1}</span>
+                <span className="playlist-item-label">
+                  {entry.type === 'track'
+                    ? `${tracksById[entry.trackId]?.title ?? 'Missing track'} — ${tracksById[entry.trackId]?.danceType ?? ''}`
+                    : `⏸ Break ${entry.breakItem.durationSec}s (${entry.breakItem.mode})`}
+                </span>
+                <button
+                  type="button"
+                  className="remove-btn"
+                  onClick={() => removePlaylistEntry(entry.id)}
+                  aria-label="Remove"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* ────────── PLAYER PANEL ────────── */}
+        <section className="panel">
+          <h2>Player</h2>
+          <audio ref={audioRef} controls className="audio-player" />
+          <div className="row compact">
+            <button type="button" onClick={playFromStart}>
+              ▶ Play
+            </button>
+            <button type="button" onClick={nextSong}>
+              ⏭ Next
+            </button>
+            <button type="button" onClick={repeatSong}>
+              ↺ Repeat
+            </button>
+            <button type="button" onClick={repeatThirty}>
+              ↩ −30s
+            </button>
+          </div>
+
+          <div className="row compact speed-row">
+            <button type="button" onClick={() => applySpeedDelta(-10)}>
+              −10%
+            </button>
+            <input
+              type="range"
+              min={-50}
+              max={50}
+              value={settings.speedPct}
+              onChange={(e) => setSettings((prev) => ({ ...prev, speedPct: clampSpeed(Number(e.target.value)) }))}
+            />
+            <button type="button" onClick={() => applySpeedDelta(10)}>
+              +10%
+            </button>
+          </div>
+
+          <div className="row compact">
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={settings.wdsfTimedMode}
+                onChange={(e) => setSettings((prev) => ({ ...prev, wdsfTimedMode: e.target.checked }))}
+              />
+              WDSF timed mode
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={sessionRule.announcementEnabled}
+                onChange={(e) => setSessionRule((prev) => ({ ...prev, announcementEnabled: e.target.checked }))}
+              />
+              Announce next dance
+            </label>
+          </div>
+
+          <h3>Voice commands</h3>
+          {!window.isSecureContext && (
+            <div className="https-warning">
+              Voice requires HTTPS. To enable on iPhone: run{' '}
+              <code>npx cloudflare tunnel --url http://localhost:5173</code> and open the provided
+              https:// address, or use <code>npm run preview -- --https</code>.
+            </div>
+          )}
+          <div className="row compact">
+            <label>
+              Language
+              <select
+                value={settings.language}
+                onChange={(e) => setSettings((prev) => ({ ...prev, language: e.target.value as 'en' | 'de' }))}
+              >
+                <option value="en">English</option>
+                <option value="de">Deutsch</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              className={isListening ? 'live' : ''}
+              onClick={toggleVoiceListening}
+              disabled={!window.isSecureContext}
+            >
+              {isListening ? '🎙 Listening…' : '🎙 Voice Command'}
+            </button>
+          </div>
+
+          <p className="hint">
+            Commands: slower · faster · next song · repeat · repeat 30 · play {'<dance>'}; also
+            German variants (langsamer, schneller, nächstes Lied…).
+          </p>
+          {repeatAnnounce && <p className="hint">Last announcement: {repeatAnnounce}</p>}
+        </section>
+
+        {/* ────────── BACKUP PANEL ────────── */}
+        <section className="panel panel-backup">
+          <h2>Backup &amp; Restore</h2>
+          <p className="hint">
+            Safari PWA storage is not backed up by iCloud. Export your data as JSON and save it to
+            iCloud Drive so you can restore after reinstalling or switching devices.
+          </p>
+
+          <h3>Export</h3>
+          <div className="row compact">
+            <button type="button" onClick={exportPlaylist}>
+              Export playlist
+            </button>
+            <button type="button" onClick={exportLibrary}>
+              Export library metadata
+            </button>
+          </div>
+
+          <h3>Import backup</h3>
+          <p className="hint">
+            Select a previously exported <code>.json</code> file. Audio files are not included —
+            re-import them from iCloud Drive separately after restoring.
+          </p>
+          <label className="file-label" htmlFor="backup-file">
+            Choose backup JSON
+          </label>
+          <input
+            id="backup-file"
+            type="file"
+            accept=".json,application/json"
+            onChange={handleImportBackup}
+          />
+        </section>
+      </main>
+    </div>
+  )
+}
+
+export default App
