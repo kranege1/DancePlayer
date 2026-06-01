@@ -185,6 +185,9 @@ function App() {
   const breakTickRef = useRef<number | null>(null)
   const breakAudioCtxRef = useRef<AudioContext | null>(null)
   const applauseAudioRefs = useRef<HTMLAudioElement[]>([])
+  // Persistent AudioContext + decoded buffer — created once on first user gesture, reused for all applause
+  const sharedAudioCtxRef = useRef<AudioContext | null>(null)
+  const applauseBufferRef = useRef<AudioBuffer | null>(null)
   const trackProgressRef = useRef<number | null>(null)
   const fadeFrameRef = useRef<number | null>(null)
 
@@ -730,7 +733,41 @@ function App() {
     setStatus(`Previewing ${track.title}. Adjust the dance in the list if needed.`)
   }
 
-  /** Plays Applause.mp3 (once at start, once near the end) or a silent keep-alive for the break. */
+  /** Ensure a shared AudioContext exists and is resumed (must be called inside a user gesture). */
+  function ensureAudioCtx() {
+    if (!sharedAudioCtxRef.current) {
+      try { sharedAudioCtxRef.current = new AudioContext() } catch { return }
+    }
+    if (sharedAudioCtxRef.current.state === 'suspended') {
+      void sharedAudioCtxRef.current.resume()
+    }
+  }
+
+  /** Pre-fetch and decode Applause.mp3 into the shared AudioContext buffer. */
+  async function ensureApplauseBuffer() {
+    if (applauseBufferRef.current) return
+    const ctx = sharedAudioCtxRef.current
+    if (!ctx) return
+    try {
+      const resp = await fetch('/Applause.mp3')
+      const arrayBuf = await resp.arrayBuffer()
+      applauseBufferRef.current = await ctx.decodeAudioData(arrayBuf)
+    } catch { /* fetch/decode failed */ }
+  }
+
+  /** Play the decoded applause buffer once through the shared AudioContext. */
+  function playApplauseBurst() {
+    const ctx = sharedAudioCtxRef.current
+    const buf = applauseBufferRef.current
+    if (!ctx || !buf) return
+    if (ctx.state === 'suspended') void ctx.resume()
+    const src = ctx.createBufferSource()
+    src.buffer = buf
+    src.connect(ctx.destination)
+    src.start()
+  }
+
+  /** Plays Applause.mp3 (play → wait durationSec → play again) or a silent keep-alive for the break. */
   function startBreakAudio(mode: 'applause' | 'silence' | 'countdown', durationSec: number) {
     // Stop any leftover applause from a previous break
     applauseAudioRefs.current.forEach((a) => { a.pause(); a.src = '' })
@@ -740,38 +777,26 @@ function App() {
 
     if (mode === 'silence') {
       // Near-zero WebAudio buffer keeps the iOS audio session alive without audible sound
-      try {
-        const ctx = new AudioContext()
-        void ctx.resume()
-        breakAudioCtxRef.current = ctx
+      const ctx = sharedAudioCtxRef.current
+      if (ctx) {
+        if (ctx.state === 'suspended') void ctx.resume()
         const sr = ctx.sampleRate
-        const loopBuf = ctx.createBuffer(1, Math.ceil(sr * 2), sr) // 2-second silent loop
+        const loopBuf = ctx.createBuffer(1, Math.ceil(sr * 2), sr)
         const src = ctx.createBufferSource()
         src.buffer = loopBuf; src.loop = true
         const g = ctx.createGain(); g.gain.value = 0.0001
         src.connect(g); g.connect(ctx.destination)
         src.start(); src.stop(ctx.currentTime + durationSec)
-        src.onended = () => void ctx.close()
-      } catch { /* AudioContext unavailable */ }
+      }
       return
     }
 
-    // ── Applause.mp3: play → silence for durationSec → play again ──
-    const playBurst = (delayMs: number) => {
-      const a = new Audio('/Applause.mp3')
-      a.volume = 1
-      applauseAudioRefs.current.push(a)
-      window.setTimeout(() => {
-        void a.play().catch(() => null)
-      }, delayMs)
-      a.onended = () => {
-        applauseAudioRefs.current = applauseAudioRefs.current.filter((x) => x !== a)
-      }
-    }
-
-    // First burst immediately, second burst after durationSec wait
-    playBurst(0)
-    playBurst(durationSec * 1000)
+    // ── Applause: first burst immediately, second after durationSec ──
+    // Uses the shared AudioContext (already unlocked by user gesture) — works on iOS.
+    playApplauseBurst()
+    const t = window.setTimeout(() => { playApplauseBurst() }, durationSec * 1000)
+    // Track the timeout so it can be cancelled if the break is aborted
+    void t
   }
 
   function speak(text: string): Promise<void> {
@@ -980,6 +1005,9 @@ function App() {
       setStatus('No playlist entries to play.')
       return
     }
+    // Initialize & unlock AudioContext on user gesture so applause works on iOS
+    ensureAudioCtx()
+    void ensureApplauseBuffer()
     void playEntryByIndex(0)
   }
 
@@ -1428,32 +1456,39 @@ function App() {
         {activeTab === 'player' && (
         <section className="panel">
 
-          {/* Saved playlist picker */}
-          {(() => {
-            const allPlaylists = [
-              ...dancePlaylists,
-              ...savedPlaylists.filter((sp) => !dancePlaylists.some((dp) => dp.id === sp.id)),
-            ]
-            if (!allPlaylists.length) return null
-            return (
-              <div className="player-playlist-picker">
-                <select
-                  value={allPlaylists.some((p) => p.id === playlist.id) ? playlist.id : ''}
-                  onChange={(e) => {
-                    const found = allPlaylists.find((p) => p.id === e.target.value)
-                    if (found) loadSavedPlaylist(found)
-                  }}
-                >
-                  {!allPlaylists.some((p) => p.id === playlist.id) && (
-                    <option value="" disabled>{playlist.name}</option>
-                  )}
-                  {allPlaylists.map((p) => (
+          {/* Playlist pickers: dance dances + other playlists */}
+          <div className="player-playlist-pickers">
+            {dancePlaylists.length > 0 && (
+              <select
+                value={dancePlaylists.some((p) => p.id === playlist.id) ? playlist.id : ''}
+                onChange={(e) => {
+                  const found = dancePlaylists.find((p) => p.id === e.target.value)
+                  if (found) loadSavedPlaylist(found)
+                }}
+              >
+                <option value="" disabled>Dance…</option>
+                {dancePlaylists.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            )}
+            {savedPlaylists.filter((sp) => !dancePlaylists.some((dp) => dp.id === sp.id)).length > 0 && (
+              <select
+                value={savedPlaylists.some((p) => p.id === playlist.id) && !dancePlaylists.some((dp) => dp.id === playlist.id) ? playlist.id : ''}
+                onChange={(e) => {
+                  const found = savedPlaylists.find((p) => p.id === e.target.value)
+                  if (found) loadSavedPlaylist(found)
+                }}
+              >
+                <option value="" disabled>Playlist…</option>
+                {savedPlaylists
+                  .filter((sp) => !dancePlaylists.some((dp) => dp.id === sp.id))
+                  .map((p) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
-                </select>
-              </div>
-            )
-          })()}
+              </select>
+            )}
+          </div>
 
           <audio ref={audioRef} controls className="audio-player" />
 

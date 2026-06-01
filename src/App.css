@@ -1124,19 +1124,22 @@ button.cta:hover {
   flex-shrink: 0;
 }
 
-/* ── Player tab: saved-playlist dropdown ── */
-.player-playlist-picker {
+/* ── Player tab: dual playlist pickers ── */
+.player-playlist-pickers {
+  display: flex;
+  gap: 8px;
   margin-bottom: 12px;
 }
-.player-playlist-picker select {
-  width: 100%;
+.player-playlist-pickers select {
+  flex: 1;
   padding: 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--line);
   background: #fff;
-  font-size: 1rem;
+  font-size: 0.95rem;
   font-weight: 600;
   color: var(--night);
+  min-width: 0;
 }
 
 /* ── Player tab: compact icon-only control row ── */
