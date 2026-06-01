@@ -905,7 +905,7 @@ function App() {
     }
 
     if (sessionRule.announcementEnabled) {
-      const phrase = settings.language === 'de' ? `Naechste ${track.danceType}` : `Next ${track.danceType}`
+      const phrase = `Next ${track.danceType}`   // always English
       setRepeatAnnounce(phrase)
       await speak(phrase) // wait for announcement to finish before starting playback
     }
@@ -1076,22 +1076,37 @@ function App() {
     recognitionRef.current = null
 
     const recognition = new SpeechRecognitionCtor()
-    recognition.lang = settings.language === 'de' ? 'de-DE' : 'en-US'
+    // No lang lock — let the browser/OS use its default so both English and German
+    // transcription work. The parser handles both languages regardless.
     recognition.interimResults = false
-    recognition.continuous = true   // keep listening without needing button re-press
-    recognition.maxAlternatives = 1
+    recognition.continuous = false  // one-shot: stop after the command so audio is never ducked
+    recognition.maxAlternatives = 3 // try multiple alternatives to catch both EN and DE
 
     recognition.onspeechstart = () => {
       setStatus('Listening… speak now')
     }
 
     recognition.onresult = (event) => {
-      // With continuous=true, results accumulate; always read the latest one
-      const lastIndex = event.results.length - 1
-      const transcript = event.results[lastIndex]?.[0]?.transcript ?? ''
-      if (!transcript.trim()) return
-      setStatus(`Voice heard: "${transcript}"`)
-      executeVoiceCommand(transcript)
+      // Try all alternatives across all results to find a recognized command
+      for (let r = event.results.length - 1; r >= 0; r--) {
+        const result = event.results[r]
+        for (let a = 0; a < result.length; a++) {
+          const transcript = result[a]?.transcript ?? ''
+          if (!transcript.trim()) continue
+          const intent = parseVoiceIntent(transcript)
+          if (intent.type !== 'unknown') {
+            setStatus(`Voice: "${transcript}"`)
+            executeVoiceCommand(transcript)
+            // Stop listening after a successful command
+            intendedListeningRef.current = false
+            try { recognition.stop() } catch { /* ignore */ }
+            return
+          }
+        }
+      }
+      // Nothing matched — show what was heard but keep listening (onend will fire and restart)
+      const last = event.results[event.results.length - 1]?.[0]?.transcript ?? ''
+      setStatus(`Voice heard: "${last}" — not recognized`)
     }
 
     recognition.onerror = (e) => {
@@ -1112,10 +1127,9 @@ function App() {
     }
 
     recognition.onend = () => {
-      // iOS Safari does not honour continuous=true — it stops after each utterance.
-      // Auto-restart as long as the user hasn't explicitly stopped.
+      // After a recognized command, intendedListeningRef was set false — just stop.
+      // For no-match results, restart once so the user can try again.
       if (intendedListeningRef.current) {
-        // Small delay avoids tight restart loops on iOS
         window.setTimeout(() => {
           if (intendedListeningRef.current) startVoiceRecognition()
         }, 200)
@@ -1595,16 +1609,6 @@ function App() {
             </div>
           )}
           <div className="row compact">
-            <label>
-              Language
-              <select
-                value={settings.language}
-                onChange={(e) => setSettings((prev) => ({ ...prev, language: e.target.value as 'en' | 'de' }))}
-              >
-                <option value="en">English</option>
-                <option value="de">Deutsch</option>
-              </select>
-            </label>
             <button
               type="button"
               className={isListening ? 'live' : ''}
@@ -1615,8 +1619,7 @@ function App() {
           </div>
 
           <p className="hint">
-            Commands: slower · faster · next song · repeat · repeat 30 · play {'<dance>'}; also
-            German variants (langsamer, schneller, nächstes Lied…).
+            Commands (EN+DE): slower/langsamer · faster/schneller · next song/nächstes Lied · repeat/wiederholen · play {'<dance>'}/spiele {'<dance>'}
           </p>
           {repeatAnnounce && <p className="hint">Last announcement: {repeatAnnounce}</p>}
 
