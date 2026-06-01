@@ -119,6 +119,19 @@ const DANCE_COLORS: Record<DanceType, string> = {
   Quickstep: '#f57c00',
 }
 
+const DANCE_ABBR: Record<DanceType, string> = {
+  Samba: 'SA',
+  ChaCha: 'CC',
+  Rumba: 'RB',
+  'Paso Doble': 'PD',
+  Jive: 'JV',
+  Waltz: 'WZ',
+  Tango: 'TG',
+  'Viennese Waltz': 'VW',
+  Foxtrot: 'FT',
+  Quickstep: 'QS',
+}
+
 // Strip leading track-number prefixes and trailing dance/BPM annotations
 function cleanDisplayTitle(raw: string): string {
   let s = raw.trim()
@@ -1412,7 +1425,7 @@ function App() {
                 return (
                   <div key={entry.id} className="qe-row">
                     <span className="qe-num">{idx + 1}</span>
-                    <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }}>{t.danceType}</span>
+                    <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>{DANCE_ABBR[t.danceType]}</span>
                     <span className="qe-info">
                       <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
                       {t.artist && <span className="qe-artist">{t.artist}</span>}
@@ -1483,7 +1496,7 @@ function App() {
                         return (
                           <div key={entry.id} className="qe-row">
                             <span className="qe-num">{idx + 1}</span>
-                            <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }}>{t.danceType}</span>
+                            <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>{DANCE_ABBR[t.danceType]}</span>
                             <span className="qe-info">
                               <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
                               {t.artist && <span className="qe-artist">{t.artist}</span>}
@@ -1762,8 +1775,8 @@ function App() {
                       onClick={() => void playEntryByIndex(index)}
                     >
                       <span className="pq-num">{index + 1}</span>
-                      <span className="dance-badge pq-badge" style={{ background: DANCE_COLORS[t.danceType] }}>
-                        {t.danceType}
+                      <span className="dance-badge pq-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>
+                        {DANCE_ABBR[t.danceType]}
                       </span>
                       <span className="pq-info">
                         {isActive && <span className="pq-now-playing-label">▶ Now playing</span>}

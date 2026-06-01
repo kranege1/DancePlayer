@@ -903,6 +903,13 @@ button.cta:hover {
 }
 
 .qe-badge {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  justify-content: center;
+  font-size: 0.63rem;
+  letter-spacing: 0.01em;
   flex-shrink: 0;
 }
 
@@ -964,10 +971,33 @@ button.cta:hover {
   display: grid;
   gap: 4px;
   margin-bottom: 14px;
-  padding: 10px;
+  padding: 8px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: #f7fafb;
+  box-sizing: border-box;
+  width: 100%;
+  overflow: hidden;
+}
+
+.current-playlist-entries .qe-row {
+  padding: 3px 5px;
+  min-height: 34px;
+  gap: 4px;
+}
+
+.current-playlist-entries .qe-title {
+  font-size: 0.8rem;
+}
+
+.current-playlist-entries .qe-artist {
+  font-size: 0.68rem;
+}
+
+.current-playlist-entries .qe-actions button {
+  width: 22px;
+  height: 22px;
+  font-size: 0.7rem;
 }
 
 .saved-playlists-heading {
@@ -1393,6 +1423,13 @@ button.cta:hover {
 }
 
 .pq-badge {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  justify-content: center;
+  font-size: 0.63rem;
+  letter-spacing: 0.01em;
   flex-shrink: 0;
 }
 
