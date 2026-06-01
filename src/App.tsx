@@ -962,7 +962,7 @@ function App() {
       trackProgressRef.current = requestAnimationFrame(progressTick)
 
       if (settings.wdsfTimedMode) {
-        const fadeWindow = getFadeWindow(startSec, track.targetPlaytimeSec, track.fadeOutSec)
+        const fadeWindow = getFadeWindow(startSec, track.targetPlaytimeSec, 5) // always 5 s fade in timed mode
 
         const tick = () => {
           if (!audio || audio.paused) return
