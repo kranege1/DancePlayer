@@ -1412,24 +1412,31 @@ function App() {
         <section className="panel">
 
           {/* Saved playlist picker */}
-          {savedPlaylists.length > 0 && (
-            <div className="player-playlist-picker">
-              <select
-                value={playlist.id}
-                onChange={(e) => {
-                  const found = savedPlaylists.find((p) => p.id === e.target.value)
-                  if (found) loadSavedPlaylist(found)
-                }}
-              >
-                <option value={playlist.id} disabled={savedPlaylists.some((p) => p.id === playlist.id)}>
-                  {playlist.name}
-                </option>
-                {savedPlaylists.map((sp) => (
-                  <option key={sp.id} value={sp.id}>{sp.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
+          {(() => {
+            const allPlaylists = [
+              ...dancePlaylists,
+              ...savedPlaylists.filter((sp) => !dancePlaylists.some((dp) => dp.id === sp.id)),
+            ]
+            if (!allPlaylists.length) return null
+            return (
+              <div className="player-playlist-picker">
+                <select
+                  value={allPlaylists.some((p) => p.id === playlist.id) ? playlist.id : ''}
+                  onChange={(e) => {
+                    const found = allPlaylists.find((p) => p.id === e.target.value)
+                    if (found) loadSavedPlaylist(found)
+                  }}
+                >
+                  {!allPlaylists.some((p) => p.id === playlist.id) && (
+                    <option value="" disabled>{playlist.name}</option>
+                  )}
+                  {allPlaylists.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+            )
+          })()}
 
           <audio ref={audioRef} controls className="audio-player" />
 
