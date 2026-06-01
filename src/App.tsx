@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
   DANCES,
@@ -150,6 +150,9 @@ function App() {
   const [isListening, setIsListening] = useState(false)
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null)
   const [repeatAnnounce, setRepeatAnnounce] = useState('')
+  const [_breakSecondsLeft, setBreakSecondsLeft] = useState<number | null>(null)
+  const [trackProgress, setTrackProgress] = useState(0) // 0–1
+  const [previewingTrackId, setPreviewingTrackId] = useState<string | null>(null)
 
   const [fileMap, setFileMap] = useState<Record<string, File | undefined>>({})
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set())
@@ -165,8 +168,12 @@ function App() {
   // Tracks whether the user *intends* listening to stay on — used for safe auto-restart on iOS
   const intendedListeningRef = useRef(false)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const previewAudioRef = useRef<HTMLAudioElement>(new Audio())
+  const previewObjectUrlRef = useRef<string | null>(null)
   const activeObjectUrlRef = useRef<string | null>(null)
   const breakTimeoutRef = useRef<number | null>(null)
+  const breakTickRef = useRef<number | null>(null)
+  const trackProgressRef = useRef<number | null>(null)
   const fadeFrameRef = useRef<number | null>(null)
 
   useEffect(() => {
@@ -416,6 +423,39 @@ function App() {
     setPlaylist((prev) => ({ ...prev, entries: prev.entries.filter((e) => e.id !== entryId) }))
   }
 
+  async function togglePreview(trackId: string) {
+    const pa = previewAudioRef.current
+    // Stop any running preview
+    if (!pa.paused) {
+      pa.pause()
+      if (previewObjectUrlRef.current) {
+        URL.revokeObjectURL(previewObjectUrlRef.current)
+        previewObjectUrlRef.current = null
+      }
+      if (previewingTrackId === trackId) {
+        setPreviewingTrackId(null)
+        return
+      }
+    }
+    // Start preview for this track
+    const file = fileMap[trackId] ?? await getAudioFile(trackId)
+    if (!file) { setStatus('Audio file not available for preview.'); return }
+    const url = URL.createObjectURL(file)
+    previewObjectUrlRef.current = url
+    pa.src = url
+    const track = tracks.find((t) => t.id === trackId)
+    pa.currentTime = track?.cueStartSec ?? 0
+    pa.playbackRate = 1
+    pa.volume = 0.8
+    pa.onended = () => {
+      setPreviewingTrackId(null)
+      URL.revokeObjectURL(url)
+      previewObjectUrlRef.current = null
+    }
+    await pa.play().catch(() => null)
+    setPreviewingTrackId(trackId)
+  }
+
   function moveQueueEntry(fromIndex: number, dir: -1 | 1) {
     const toIndex = fromIndex + dir
     setPlaylist((prev) => {
@@ -585,13 +625,23 @@ function App() {
     setPlaylist((prev) => {
       const result: PlaylistEntry[] = []
       for (let i = 0; i < prev.entries.length; i++) {
-        result.push(prev.entries[i])
-        // insert a break after every track that isn't already followed by a break
-        if (prev.entries[i].type === 'track' && prev.entries[i + 1]?.type !== 'break') {
-          result.push({ id: createId('entry-break'), type: 'break', breakItem: makeBreak() })
+        const entry = prev.entries[i]
+        if (entry.type === 'track') {
+          result.push(entry)
+          // replace existing adjacent break OR insert a new one
+          const next = prev.entries[i + 1]
+          if (next?.type === 'break') {
+            // overwrite it with the current settings
+            result.push({ ...next, breakItem: makeBreak() })
+            i++ // skip the old break
+          } else {
+            result.push({ id: createId('entry-break'), type: 'break', breakItem: makeBreak() })
+          }
+        } else {
+          // a break not preceded by a track (e.g. at the start) — keep it
+          result.push(entry)
         }
       }
-      // if playlist is empty or last entry is a track with no trailing break already added, nothing extra needed
       return { ...prev, entries: result }
     })
   }
@@ -643,10 +693,20 @@ function App() {
       window.clearTimeout(breakTimeoutRef.current)
       breakTimeoutRef.current = null
     }
+    if (breakTickRef.current) {
+      window.clearInterval(breakTickRef.current)
+      breakTickRef.current = null
+    }
+    if (trackProgressRef.current) {
+      cancelAnimationFrame(trackProgressRef.current)
+      trackProgressRef.current = null
+    }
     if (fadeFrameRef.current) {
       cancelAnimationFrame(fadeFrameRef.current)
       fadeFrameRef.current = null
     }
+    setBreakSecondsLeft(null)
+    setTrackProgress(0)
   }
 
   async function playEntryByIndex(index: number) {
@@ -661,21 +721,75 @@ function App() {
     setActiveEntryId(entry.id)
 
     if (entry.type === 'break') {
-      setStatus(`Break: ${entry.breakItem.durationSec}s (${entry.breakItem.mode})`)
-      if (entry.breakItem.mode === 'countdown') {
-        const step = 10
-        for (let t = entry.breakItem.durationSec; t >= 0; t -= step) {
-          const delay = (entry.breakItem.durationSec - t) * 1000
-          window.setTimeout(() => {
-            if (t === 0 || t === 5 || t % 10 === 0) {
-              speak(String(t))
+      const dur = entry.breakItem.durationSec
+      setBreakSecondsLeft(dur)
+      setStatus(`Break: ${dur}s (${entry.breakItem.mode})`)
+
+      // ── Applause synthesis ──────────────────────────────────────────
+      if (entry.breakItem.mode === 'applause') {
+        const tryApplause = (startAt: number, endAt: number) => {
+          try {
+            const ctx = new AudioContext()
+            const totalSec = endAt - startAt
+            const bufferSize = Math.ceil(ctx.sampleRate * totalSec)
+            const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate)
+            const data = buffer.getChannelData(0)
+            // noise envelope: fade-in 1s, sustain, fade-out 1s
+            const fadeIn = Math.min(ctx.sampleRate, bufferSize)
+            const fadeOut = Math.min(ctx.sampleRate, bufferSize)
+            for (let i = 0; i < bufferSize; i++) {
+              const env = i < fadeIn
+                ? i / fadeIn
+                : i > bufferSize - fadeOut
+                  ? (bufferSize - i) / fadeOut
+                  : 1
+              data[i] = (Math.random() * 2 - 1) * env * 0.35
             }
+            const src = ctx.createBufferSource()
+            src.buffer = buffer
+            // band-pass filter to make it sound more like clapping
+            const bp = ctx.createBiquadFilter()
+            bp.type = 'bandpass'
+            bp.frequency.value = 1800
+            bp.Q.value = 0.6
+            src.connect(bp)
+            bp.connect(ctx.destination)
+            src.start(ctx.currentTime + startAt)
+            src.stop(ctx.currentTime + endAt)
+            src.onended = () => void ctx.close()
+          } catch { /* AudioContext may be blocked before user gesture */ }
+        }
+        // applause burst at start and end, silence in the middle
+        tryApplause(0, Math.min(4, dur * 0.25))
+        if (dur > 10) tryApplause(Math.max(0, dur - 4), dur)
+      }
+
+      // ── Countdown speech ────────────────────────────────────────────
+      if (entry.breakItem.mode === 'countdown') {
+        for (let t = dur; t >= 0; t -= 10) {
+          const delay = (dur - t) * 1000
+          window.setTimeout(() => {
+            if (t === 0 || t === 5 || t % 10 === 0) speak(String(t))
           }, delay)
         }
       }
+
+      // ── Per-second tick (drives breakSecondsLeft) ───────────────────
+      const started = performance.now()
+      breakTickRef.current = window.setInterval(() => {
+        const elapsed = (performance.now() - started) / 1000
+        const left = Math.max(0, Math.ceil(dur - elapsed))
+        setBreakSecondsLeft(left)
+      }, 500)
+
       breakTimeoutRef.current = window.setTimeout(() => {
+        if (breakTickRef.current) {
+          window.clearInterval(breakTickRef.current)
+          breakTickRef.current = null
+        }
+        setBreakSecondsLeft(null)
         void playEntryByIndex(index + 1)
-      }, entry.breakItem.durationSec * 1000)
+      }, dur * 1000)
       return
     }
 
@@ -722,6 +836,15 @@ function App() {
     audio.onloadedmetadata = () => {
       const startSec = Math.max(0, track.cueStartSec)
       audio.currentTime = startSec
+
+      // ── Track progress RAF ──────────────────────────────────────────
+      const progressTick = () => {
+        if (!audio || audio.paused || audio.ended) return
+        const total = audio.duration || track.durationSec || 1
+        setTrackProgress(Math.min(1, (audio.currentTime - startSec) / (total - startSec)))
+        trackProgressRef.current = requestAnimationFrame(progressTick)
+      }
+      trackProgressRef.current = requestAnimationFrame(progressTick)
 
       if (settings.wdsfTimedMode) {
         const fadeWindow = getFadeWindow(startSec, track.targetPlaytimeSec, track.fadeOutSec)
@@ -1454,8 +1577,14 @@ function App() {
                         {t.danceType}
                       </span>
                       <span className="pq-info">
+                        {isActive && <span className="pq-now-playing-label">▶ Now playing</span>}
                         <span className="pq-title">{cleanDisplayTitle(t.title)}</span>
                         {t.artist && <span className="pq-artist">{t.artist}</span>}
+                        {isActive && (
+                          <div className="pq-progress-bar">
+                            <div className="pq-progress-fill pq-track-fill" style={{ width: `${Math.round(trackProgress * 100)}%` }} />
+                          </div>
+                        )}
                       </span>
                       <button
                         type="button" className="remove-btn"
@@ -1542,6 +1671,12 @@ function App() {
                             <span className="dance-track-title">{cleanDisplayTitle(t.title)}</span>
                             <span className="dance-track-artist">{t.artist ?? '\u00a0'}</span>
                           </div>
+                          <button
+                            type="button"
+                            className={`preview-btn${previewingTrackId === entry.trackId ? ' previewing' : ''}`}
+                            title={previewingTrackId === entry.trackId ? 'Stop preview' : 'Preview track'}
+                            onClick={(e) => { e.stopPropagation(); void togglePreview(entry.trackId) }}
+                          >{previewingTrackId === entry.trackId ? '■' : '▶'}</button>
                           <button
                             type="button"
                             className="add-one-btn"

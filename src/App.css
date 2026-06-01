@@ -634,6 +634,29 @@ button.cta:hover {
   text-align: center;
 }
 
+/* ── Dance playlist per-track preview button ── */
+.preview-btn {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 0.75rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: linear-gradient(180deg, #e8eef8 0%, #c8d8f0 100%);
+  border: 1px solid #6d8ebb;
+  color: #1a3a6b;
+}
+.preview-btn:hover { filter: brightness(0.93); }
+.preview-btn.previewing {
+  background: linear-gradient(180deg, #fff0d0 0%, #ffd88a 100%);
+  border-color: #cc8800;
+  color: #7a4400;
+}
+
 /* ── Dance playlist per-track + button ── */
 .add-one-btn {
   flex-shrink: 0;
@@ -1024,6 +1047,47 @@ button.cta:hover {
 .pq-label {
   flex: 1;
   font-size: 0.85rem;
+}
+
+/* ── Progress bars in Up Next queue ── */
+.pq-now-playing-label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #4caf82;
+  text-transform: uppercase;
+  margin-bottom: 1px;
+}
+
+.pq-break-left {
+  display: block;
+  font-size: 0.72rem;
+  color: #e8a64a;
+  margin-top: 2px;
+}
+
+.pq-progress-bar {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.12);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.pq-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.5s linear;
+}
+
+.pq-track-fill {
+  background: #4caf82;
+}
+
+.pq-break-fill {
+  background: #e8a64a;
 }
 
 /* ── Bottom tab navigation ── */
