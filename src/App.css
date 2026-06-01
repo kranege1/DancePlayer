@@ -753,6 +753,24 @@ button.cta:hover {
 }
 .track-row-menu-btn:hover { background: #dce4f0; }
 
+.track-row-pencil-btn {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  font-size: 1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid transparent;
+  color: #778;
+  cursor: pointer;
+}
+.track-row-pencil-btn:hover { background: #eef2f8; border-color: #b0bcd0; color: #334; }
+
 .track-row-actions {
   display: flex;
   align-items: center;

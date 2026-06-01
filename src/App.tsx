@@ -1717,28 +1717,12 @@ function App() {
                               onClick={(e) => { e.stopPropagation(); setExpandedEntryId(entry.id) }}
                             >⋯</button>
                           )}
-                          <details className="track-details dance-track-edit" onClick={(e) => e.stopPropagation()}>
-                            <summary title="Edit title / artist">✎</summary>
-                            <div className="row compact">
-                              <label>
-                                Title
-                                <input
-                                  type="text"
-                                  value={t.title}
-                                  onChange={(e) => updateTrack(t.id, { title: e.target.value })}
-                                />
-                              </label>
-                              <label>
-                                Artist
-                                <input
-                                  type="text"
-                                  value={t.artist ?? ''}
-                                  placeholder="Artist name"
-                                  onChange={(e) => updateTrack(t.id, { artist: e.target.value || undefined })}
-                                />
-                              </label>
-                            </div>
-                          </details>
+                          <button
+                            type="button"
+                            className="track-row-pencil-btn"
+                            title="Edit track"
+                            onClick={(e) => { e.stopPropagation(); setEditingTrackId(t.id) }}
+                          >✎</button>
                         </div>
                       )
                     })}
