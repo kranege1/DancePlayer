@@ -2493,6 +2493,28 @@ function App() {
                             transition: 'width 0.1s linear'
                           }} />
                         )}
+                        {/* Cue start vertical indicator line */}
+                        <div style={{
+                          position: 'absolute',
+                          left: `${cuePos}%`,
+                          width: '1.5px',
+                          height: '100%',
+                          background: 'var(--paper)',
+                          transform: 'translateX(-50%)',
+                          opacity: 0.95,
+                          zIndex: 2
+                        }} />
+                        {/* Playtime end vertical indicator line */}
+                        <div style={{
+                          position: 'absolute',
+                          left: `${endPos}%`,
+                          width: '1.5px',
+                          height: '100%',
+                          background: 'var(--paper)',
+                          transform: 'translateX(-50%)',
+                          opacity: 0.95,
+                          zIndex: 2
+                        }} />
                       </div>
                     )
                   })()}
