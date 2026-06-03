@@ -11,7 +11,7 @@ import {
   type SessionRule,
   type Track,
 } from './types'
-import { clearAllAudioFiles, getAudioFile, saveAudioFile } from './mediaStore'
+import { clearAllAudioFiles, getAudioFile, saveAudioFile, removeAudioFile } from './mediaStore'
 import { parseVoiceIntent } from './voice'
 import { analyzeTrackRhythm } from './analysis'
 import { getFadeWindow, getRepeatThirtyStart } from './playbackMath'
@@ -421,6 +421,26 @@ function App() {
 
   function updateTrack(trackId: string, update: Partial<Track>) {
     setTracks((prev) => prev.map((track) => (track.id === trackId ? { ...track, ...update } : track)))
+  }
+
+  function deleteSelectedTracks() {
+    if (!selectedTrackIds.size) return
+    if (!window.confirm(`Delete ${selectedTrackIds.size} selected track(s) permanently?`)) return
+
+    const idsToDelete = Array.from(selectedTrackIds)
+    setTracks((prev) => prev.filter((t) => !selectedTrackIds.has(t.id)))
+    idsToDelete.forEach((id) => {
+      void removeAudioFile(id)
+    })
+    setFileMap((prev) => {
+      const next = { ...prev }
+      idsToDelete.forEach((id) => {
+        delete next[id]
+      })
+      return next
+    })
+    clearSelection()
+    setStatus(`Deleted ${idsToDelete.length} track(s) from staging library and device storage.`)
   }
 
   async function handleImport(event: React.ChangeEvent<HTMLInputElement>) {
@@ -1521,6 +1541,9 @@ function App() {
                 <>
                   <button type="button" className="cta" onClick={addSelectedToPlaylist}>
                     Add {selectedTrackIds.size} to playlist
+                  </button>
+                  <button type="button" className="btn-danger" onClick={deleteSelectedTracks}>
+                    🗑 Delete
                   </button>
                   <button type="button" onClick={clearSelection}>
                     Clear
