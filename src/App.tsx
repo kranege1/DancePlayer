@@ -327,6 +327,20 @@ function App() {
   }, [settings.speedPct])
 
   useEffect(() => {
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persist().then((persistent) => {
+        if (persistent) {
+          console.log('Storage persistence guaranteed by browser.')
+        } else {
+          console.warn('Storage persistence denied by browser.')
+        }
+      }).catch((err) => {
+        console.error('Error requesting storage persistence:', err)
+      })
+    }
+  }, [])
+
+  useEffect(() => {
     return () => {
       if (activeObjectUrlRef.current) {
         URL.revokeObjectURL(activeObjectUrlRef.current)
