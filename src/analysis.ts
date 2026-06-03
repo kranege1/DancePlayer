@@ -23,13 +23,13 @@ interface DanceScore {
 const DANCE_KEYWORDS: Record<DanceType, string[]> = {
   Samba: ['samba', 'sb', 'sa'],
   ChaCha: ['chacha', 'cha cha', 'cha-cha', 'ch'],
-  Rumba: ['rumba', 'rb'],
-  'Paso Doble': ['paso doble', 'pasodoble', 'paso-doble', 'pd'],
+  Rumba: ['rumba', 'rb', 'ru'],
+  'Paso Doble': ['paso doble', 'pasodoble', 'paso-doble', 'pd', 'paso'],
   Jive: ['jive', 'jv'],
-  Waltz: ['waltz', 'walzer', 'slow waltz', 'langsamer walzer', 'lw'],
+  Waltz: ['waltz', 'walzer', 'slow waltz', 'langsamer walzer', 'lw', 'ewalz'],
   Tango: ['tango', 'tg'],
-  'Viennese Waltz': ['viennese waltz', 'wiener walzer', 'viennese', 'wiener', 'vw', 'ww'],
-  Foxtrot: ['foxtrot', 'slow fox', 'slowfox', 'sf', 'foxtrott'],
+  'Viennese Waltz': ['viennese waltz', 'wiener walzer', 'viennese', 'wiener', 'vw', 'ww', 'vwalz', 'vwaltz', 'ewaltz'],
+  Foxtrot: ['foxtrot', 'slow fox', 'slowfox', 'sf', 'foxtrott', 'slow'],
   Quickstep: ['quickstep', 'quick step', 'qs'],
   Bachata: ['bachata'],
   Salsa: ['salsa'],
@@ -247,8 +247,8 @@ function scoreDancesFromGenres(genres: string[]): DanceScore[] {
     else if (g === 'rumba') add('Rumba', 5)
     else if (g === 'paso doble' || g === 'pasodoble') add('Paso Doble', 5)
     else if (g === 'jive') add('Jive', 5)
-    else if (g === 'slow waltz' || g === 'waltz') add('Waltz', 4)
-    else if (g === 'viennese waltz') add('Viennese Waltz', 5)
+    else if (g === 'slow waltz' || g === 'waltz' || g === 'ewalz') add('Waltz', 4)
+    else if (g === 'viennese waltz' || g === 'vwalz') add('Viennese Waltz', 5)
     else if (g === 'tango (ballroom)' || g === 'ballroom tango') add('Tango', 5)
     else if (g === 'slow foxtrot' || g === 'foxtrot') add('Foxtrot', 4)
     else if (g === 'quickstep') add('Quickstep', 5)

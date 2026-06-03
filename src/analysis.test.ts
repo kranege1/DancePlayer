@@ -25,4 +25,13 @@ describe('inferDanceFromHints', () => {
       inferDanceFromHints({ title: 'Malando - Tango Des Roses', fileName: 'track.mp3' }).danceType,
     ).toBe('Tango')
   })
+
+  it('detects EWalz and VWalz abbreviation variants', () => {
+    expect(
+      inferDanceFromHints({ fileName: 'SongName (EWalz 29).mp3' }).danceType,
+    ).toBe('Waltz')
+    expect(
+      inferDanceFromHints({ title: 'Beautiful Song VWalz', fileName: 'track.mp3' }).danceType,
+    ).toBe('Viennese Waltz')
+  })
 })

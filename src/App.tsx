@@ -91,7 +91,8 @@ function createId(prefix: string) {
 }
 
 function clampSpeed(value: number) {
-  return Math.max(-50, Math.min(50, value))
+  const rounded = Math.round(value / 10) * 10
+  return Math.max(-50, Math.min(50, rounded))
 }
 
 function sortByTitle(a: Track, b: Track) {
