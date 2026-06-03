@@ -278,6 +278,8 @@ function App() {
   const [breakInfo, setBreakInfo] = useState<{ mode: SessionRule['breakMode']; totalSec: number } | null>(null)
   const [trackProgress, setTrackProgress] = useState(0) // 0–1
   const [previewingTrackId, setPreviewingTrackId] = useState<string | null>(null)
+  const [previewCurrentTime, setPreviewCurrentTime] = useState(0)
+  const [previewDuration, setPreviewDuration] = useState(0)
   const [openDanceCards, setOpenDanceCards] = useState<Set<string>>(new Set())
 
   const [fileMap, setFileMap] = useState<Record<string, File | undefined>>({})
@@ -330,6 +332,25 @@ function App() {
       if (fadeFrameRef.current) {
         cancelAnimationFrame(fadeFrameRef.current)
       }
+    }
+  }, [])
+
+  useEffect(() => {
+    const pa = previewAudioRef.current
+    const handleTimeUpdate = () => {
+      setPreviewCurrentTime(pa.currentTime)
+      setPreviewDuration(pa.duration || 0)
+    }
+    const handleEnded = () => {
+      setPreviewingTrackId(null)
+      setPreviewCurrentTime(0)
+      setPreviewDuration(0)
+    }
+    pa.addEventListener('timeupdate', handleTimeUpdate)
+    pa.addEventListener('ended', handleEnded)
+    return () => {
+      pa.removeEventListener('timeupdate', handleTimeUpdate)
+      pa.removeEventListener('ended', handleEnded)
     }
   }, [])
 
@@ -2434,7 +2455,47 @@ function App() {
                   >
                     -5s
                   </button>
-                  <span>Seek Preview</span>
+                  {(() => {
+                    const dur = previewDuration || t.durationSec || 120
+                    const cuePos = (t.cueStartSec / dur) * 100
+                    const endSec = Math.min(dur, t.cueStartSec + t.targetPlaytimeSec)
+                    const endPos = (endSec / dur) * 100
+                    const curTime = previewingTrackId === t.id ? previewCurrentTime : 0
+                    const progressPos = (curTime / dur) * 100
+                    return (
+                      <div className="preview-cue-bar" style={{
+                        flex: 1,
+                        height: '8px',
+                        background: 'var(--line)',
+                        borderRadius: '4px',
+                        position: 'relative',
+                        overflow: 'hidden',
+                        margin: '0 8px'
+                      }} title={`Cue: ${t.cueStartSec}s, Playtime: ${t.targetPlaytimeSec}s`}>
+                        {/* Highlighted active range (Cue -> Cue + Playtime) */}
+                        <div style={{
+                          position: 'absolute',
+                          left: `${cuePos}%`,
+                          width: `${endPos - cuePos}%`,
+                          height: '100%',
+                          background: 'rgba(44, 181, 116, 0.28)'
+                        }} />
+                        {/* Played progress fill */}
+                        {previewingTrackId === t.id && (
+                          <div style={{
+                            position: 'absolute',
+                            left: 0,
+                            top: 0,
+                            width: `${progressPos}%`,
+                            height: '100%',
+                            background: 'var(--ok)',
+                            opacity: 0.8,
+                            transition: 'width 0.1s linear'
+                          }} />
+                        )}
+                      </div>
+                    )
+                  })()}
                   <button
                     type="button"
                     onClick={() => {
