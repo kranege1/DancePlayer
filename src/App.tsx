@@ -245,6 +245,12 @@ export async function computeFileHash(file: File): Promise<string> {
   return hashHex
 }
 
+function formatTime(s: number): string {
+  const mins = Math.floor(Math.max(0, s) / 60)
+  const secs = Math.floor(Math.max(0, s) % 60)
+  return `${mins}:${String(secs).padStart(2, '0')}`
+}
+
 function App() {
   // Load initial persisted state synchronously from localStorage to avoid setting state in useEffect
   const persistedState = useMemo((): Partial<PersistedState> => {
@@ -2775,6 +2781,14 @@ function App() {
                   >
                     +5s
                   </button>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--night)', padding: '0 8px', marginTop: '4px', opacity: 0.8 }}>
+                  <span>
+                    ▶ {formatTime(previewingTrackId === t.id ? previewCurrentTime : 0)} / {formatTime(t.durationSec || 0)}
+                  </span>
+                  <span>
+                    Cue: {formatTime(t.cueStartSec)} · End: {formatTime(Math.min(t.durationSec || 0, t.cueStartSec + t.targetPlaytimeSec))}
+                  </span>
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '8px', marginTop: '8px', width: '100%' }}>
