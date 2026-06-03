@@ -35,3 +35,12 @@ describe('inferDanceFromHints', () => {
     ).toBe('Viennese Waltz')
   })
 })
+
+describe('computeFileHash', () => {
+  it('computes correct SHA-256 hash for a File object', async () => {
+    const { computeFileHash } = await import('./App')
+    const file = new File(['dance music content'], 'test.mp3', { type: 'audio/mpeg' })
+    const hash = await computeFileHash(file)
+    expect(hash).toBe('0f4b6b246bbe080791e8fd402e1f2d7edcd5e58e7f3d5e212acb64dc5940c9dd')
+  })
+})

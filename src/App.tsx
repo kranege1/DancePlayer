@@ -237,6 +237,14 @@ function extractArtistFromFilename(filenameNoExt: string): { title: string; arti
   return { title: name, danceHint }
 }
 
+export async function computeFileHash(file: File): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer()
+  const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  const hashHex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
+  return hashHex
+}
+
 function App() {
   // Load initial persisted state synchronously from localStorage to avoid setting state in useEffect
   const persistedState = useMemo((): Partial<PersistedState> => {
@@ -429,21 +437,37 @@ function App() {
       return
     }
 
-    // Skip files already in the library (match by filename without extension)
-    const existingNames = new Set(
-      tracks.map((t) => t.title.trim().toLowerCase())
-    )
-    const newFiles = accepted.filter((file) => {
-      const nameNoExt = file.name.replace(/\.[^.]+$/, '').trim().toLowerCase()
-      return !existingNames.has(nameNoExt)
+    // Compute hashes for all accepted files to check for duplicates
+    setStatus('Checking for duplicate files...')
+    const fileHashes = await Promise.all(accepted.map(async (file) => {
+      try {
+        const hash = await computeFileHash(file)
+        return { file, hash }
+      } catch (err) {
+        console.error('Failed to compute hash for file:', file.name, err)
+        return { file, hash: undefined }
+      }
+    }))
+
+    const newFiles = fileHashes.filter(({ file, hash }) => {
+      const isDuplicate = tracks.some((t) => {
+        if (hash && t.hash) {
+          return t.hash === hash
+        }
+        const nameNoExt = file.name.replace(/\.[^.]+$/, '').trim().toLowerCase()
+        return t.title.trim().toLowerCase() === nameNoExt
+      })
+      return !isDuplicate
     })
+
     const skippedCount = accepted.length - newFiles.length
     if (!newFiles.length) {
-      setStatus(`All ${accepted.length} file(s) already imported.`)
+      setStatus(`All ${accepted.length} file(s) already imported (detected by hash/name).`)
       event.target.value = ''
       return
     }
-    const filesToImport = newFiles
+    const filesToImport = newFiles.map(nf => nf.file)
+    const filesToImportHashes = newFiles.map(nf => nf.hash)
 
     setImportProgress({ done: 0, total: filesToImport.length })
 
@@ -544,6 +568,7 @@ function App() {
         cueStartSec: 0,
         targetPlaytimeSec: WDSF_2025_DEFAULT_PLAYTIMES[danceType],
         fadeOutSec: 3,
+        hash: filesToImportHashes[i],
       })
       importedMap[id] = file
 

@@ -72,6 +72,7 @@ export interface Track {
   cueStartSec: number
   targetPlaytimeSec: number
   fadeOutSec: number
+  hash?: string
 }
 
 export interface BreakItem {
