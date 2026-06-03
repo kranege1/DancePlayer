@@ -2277,8 +2277,7 @@ function App() {
                                       )
                                     })}
                                   </div>
-                                  <span className="dance-track-artist" style={{ margin: 0 }}>{t.artist ?? '\u00a0'}</span>
-                                </div>
+                                  </div>
                               </div>
                             <button
                               type="button"
