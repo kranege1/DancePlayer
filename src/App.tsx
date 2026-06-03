@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
   DANCES,
@@ -16,6 +16,8 @@ import { parseVoiceIntent } from './voice'
 import { analyzeTrackRhythm } from './analysis'
 import { getFadeWindow, getRepeatThirtyStart } from './playbackMath'
 import { lookupTrackOnMusicBrainz } from './musicbrainz'
+import { parseFilenamesWithGrok, type GrokTrackInfo } from './grok'
+import danceShapeUrl from './DanceShape.png'
 
 interface SpeechResultItem {
   transcript: string
@@ -61,6 +63,7 @@ interface PersistedState {
   savedPlaylists: Playlist[]
   settings: AppSettings
   sessionRule: SessionRule
+  dancePlaylistSorts?: Record<string, 'name' | 'stars'>
 }
 
 const initialSettings: AppSettings = {
@@ -117,6 +120,32 @@ const DANCE_COLORS: Record<DanceType, string> = {
   'Viennese Waltz': '#00897b',
   Foxtrot: '#2e7d32',
   Quickstep: '#f57c00',
+  Bachata: '#5c6bc0',
+  Salsa: '#5c6bc0',
+  Kizomba: '#5c6bc0',
+  Zouk: '#5c6bc0',
+  Merengue: '#5c6bc0',
+  'West Coast Swing': '#5c6bc0',
+  'East Coast Swing': '#5c6bc0',
+  'Lindy Hop': '#5c6bc0',
+  Charleston: '#5c6bc0',
+  Balboa: '#5c6bc0',
+  Shag: '#5c6bc0',
+  'Argentine Tango': '#5c6bc0',
+  Milonga: '#5c6bc0',
+  Vals: '#5c6bc0',
+  Bolero: '#5c6bc0',
+  Mambo: '#5c6bc0',
+  'Forró': '#5c6bc0',
+  Lambada: '#5c6bc0',
+  Semba: '#5c6bc0',
+  Cumbia: '#5c6bc0',
+  'Country Western Two-Step': '#5c6bc0',
+  'Nightclub Two-Step': '#5c6bc0',
+  Polka: '#5c6bc0',
+  'Boogie Woogie': '#5c6bc0',
+  "Rock 'n' Roll": '#5c6bc0',
+  Other: '#546e7a',
 }
 
 const DANCE_ABBR: Record<DanceType, string> = {
@@ -130,15 +159,41 @@ const DANCE_ABBR: Record<DanceType, string> = {
   'Viennese Waltz': 'VW',
   Foxtrot: 'SF',
   Quickstep: 'QS',
+  Bachata: 'BAC',
+  Salsa: 'SAL',
+  Kizomba: 'KIZ',
+  Zouk: 'ZOU',
+  Merengue: 'MER',
+  'West Coast Swing': 'WCS',
+  'East Coast Swing': 'ECS',
+  'Lindy Hop': 'LIN',
+  Charleston: 'CHA',
+  Balboa: 'BAL',
+  Shag: 'SHA',
+  'Argentine Tango': 'ATG',
+  Milonga: 'MIL',
+  Vals: 'VAL',
+  Bolero: 'BOL',
+  Mambo: 'MAM',
+  'Forró': 'FOR',
+  Lambada: 'LAM',
+  Semba: 'SEM',
+  Cumbia: 'CUM',
+  'Country Western Two-Step': 'CWT',
+  'Nightclub Two-Step': 'NC2',
+  Polka: 'POL',
+  'Boogie Woogie': 'BWG',
+  "Rock 'n' Roll": 'RNR',
+  Other: 'OTH',
 }
 
 // Strip leading track-number prefixes and trailing dance/BPM annotations
 function cleanDisplayTitle(raw: string): string {
   let s = raw.trim()
   s = s.replace(/^(\d{1,3}\.?\s*[-\u2013]?\s+|Track\s+\d+\s*[-\u2013]?\s*)/i, '')
-  s = s.replace(/[\s\-\u2013]+[\(\[]?(?:[A-Z][a-z]{0,3}\s+\d+|\d+\s*BPM|BPM\s*\d+)[\)\]]?$/i, '')
+  s = s.replace(/[\s-\u2013]+[([]?(?:[A-Z][a-z]{0,3}\s+\d+|\d+\s*BPM|BPM\s*\d+)[)\]]?$/i, '')
   // Also strip inline dance/BPM annotations anywhere in the title, e.g. " (Sb 51)" or "(Ch 32)"
-  s = s.replace(/\s*[\(\[][A-Z][a-z]{0,3}\s+\d+[\)\]]/g, '')
+  s = s.replace(/\s*[([][A-Z][a-z]{0,3}\s+\d+[)\]]/g, '')
   s = s.replace(/_/g, ' ').trim()
   return s || raw
 }
@@ -148,41 +203,89 @@ function cleanStoredTitle(raw: string): string {
 }
 
 // Try to extract "Artist - Title" from a bare filename (no extension)
-function extractArtistFromFilename(filenameNoExt: string): { title: string; artist?: string } {
-  const dashMatch = filenameNoExt.match(/^(.+?)\s*[-\u2013]\s*(.+)$/)
+function extractArtistFromFilename(filenameNoExt: string): { title: string; artist?: string; danceHint?: string } {
+  let name = filenameNoExt.trim()
+  let danceHint: string | undefined
+
+  // Strip leading (Dance, ...) or [Dance] prefix — e.g. "(Samba, brasilianisch) Desi Arnez - Tico Tico"
+  const parenPrefixMatch = name.match(/^[([{]([^)\]{}]+)[)\]{}]\s*/)
+  if (parenPrefixMatch) {
+    danceHint = parenPrefixMatch[1].trim()
+    name = name.slice(parenPrefixMatch[0].length).trim()
+  }
+
+  const dashMatch = name.match(/^(.+?)\s*[-\u2013]\s*(.+)$/)
   if (dashMatch) {
     const left = dashMatch[1].trim()
     const right = dashMatch[2].trim()
-    const looksLikeDance = /\b(waltz|tango|samba|cha|rumba|paso|jive|foxtrot|quickstep|viennese)\b/i.test(left)
+    const looksLikeDance = /\b(waltz|tango|samba|cha|rumba|paso|jive|foxtrot|quickstep|viennese|bachata|salsa|kizomba|swing|polka|boogie|merengue|mambo|bolero|cumbia|foxtrot)\b/i.test(left)
     if (!looksLikeDance && left.length > 1 && right.length > 1) {
-      return { title: right, artist: left }
+      if (!danceHint) {
+        const leftIsDance = /\b(waltz|tango|samba|cha|rumba|paso|jive|foxtrot|quickstep|viennese|bachata|salsa|kizomba|swing|polka|boogie|merengue|mambo|bolero|cumbia)\b/i.test(left)
+        if (leftIsDance) {
+          danceHint = left
+          return { title: right, danceHint }
+        }
+      }
+      return { title: right, artist: left, danceHint }
     }
+    if (!danceHint) danceHint = left
+    return { title: right, danceHint }
   }
-  return { title: filenameNoExt }
+
+  return { title: name, danceHint }
 }
 
 function App() {
-  const [tracks, setTracks] = useState<Track[]>([])
-  const [playlist, setPlaylist] = useState<Playlist>(initialPlaylist)
-  const [settings, setSettings] = useState<AppSettings>(initialSettings)
-  const [sessionRule, setSessionRule] = useState<SessionRule>(initialSessionRule)
-  const [status, setStatus] = useState('Ready')
+  // Load initial persisted state synchronously from localStorage to avoid setting state in useEffect
+  const persistedState = useMemo((): Partial<PersistedState> => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (raw) {
+        return JSON.parse(raw) as PersistedState
+      }
+    } catch {
+      // ignore
+    }
+    return {}
+  }, [])
+
+  const [tracks, setTracks] = useState<Track[]>(() => {
+    let loaded = persistedState.tracks ?? []
+    const migratedKey = 'danceplayer-migrated-ratings-to-zero-v1'
+    if (!localStorage.getItem(migratedKey)) {
+      loaded = loaded.map((t) => ({ ...t, qualityRating: 0, rhythmRating: 0 }))
+      localStorage.setItem(migratedKey, 'true')
+    }
+    return loaded
+  })
+  const [playlist, setPlaylist] = useState<Playlist>(() => persistedState.playlist ?? initialPlaylist)
+  const [settings, setSettings] = useState<AppSettings>(() => persistedState.settings ?? initialSettings)
+  const [sessionRule, setSessionRule] = useState<SessionRule>(() => persistedState.sessionRule ?? initialSessionRule)
+  const [status, setStatus] = useState(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      return raw ? 'Metadata restored. Cached audio will load on demand from device storage.' : 'Ready'
+    } catch {
+      return 'Could not restore saved metadata.'
+    }
+  })
   const [isListening, setIsListening] = useState(false)
+  const [dancePlaylistSorts, setDancePlaylistSorts] = useState<Record<string, 'name' | 'stars'>>(() => persistedState.dancePlaylistSorts ?? {})
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null)
   const [repeatAnnounce, setRepeatAnnounce] = useState('')
   const [breakSecondsLeft, setBreakSecondsLeft] = useState<number | null>(null)
   const [breakInfo, setBreakInfo] = useState<{ mode: SessionRule['breakMode']; totalSec: number } | null>(null)
   const [trackProgress, setTrackProgress] = useState(0) // 0–1
   const [previewingTrackId, setPreviewingTrackId] = useState<string | null>(null)
-  const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null)
   const [openDanceCards, setOpenDanceCards] = useState<Set<string>>(new Set())
 
   const [fileMap, setFileMap] = useState<Record<string, File | undefined>>({})
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set())
 
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null)
-  const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>([])
-  const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>([])
+  const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>(() => persistedState.dancePlaylists ?? [])
+  const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>(() => persistedState.savedPlaylists ?? [])
   const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('songs')
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null)
 
@@ -205,27 +308,10 @@ function App() {
   const fadeFrameRef = useRef<number | null>(null)
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as PersistedState
-      setTracks(parsed.tracks ?? [])
-      setPlaylist(parsed.playlist ?? initialPlaylist)
-      setDancePlaylists(parsed.dancePlaylists ?? [])
-      setSavedPlaylists(parsed.savedPlaylists ?? [])
-      setSettings(parsed.settings ?? initialSettings)
-      setSessionRule(parsed.sessionRule ?? initialSessionRule)
-      setStatus('Metadata restored. Cached audio will load on demand from device storage.')
-    } catch {
-      setStatus('Could not restore saved metadata.')
-    }
-  }, [])
-
-  useEffect(() => {
-    const payload: PersistedState = { tracks, playlist, dancePlaylists, savedPlaylists, settings, sessionRule }
+    const payload: PersistedState = { tracks, playlist, dancePlaylists, savedPlaylists, settings, sessionRule, dancePlaylistSorts }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload))
     sessionRuleRef.current = sessionRule
-  }, [tracks, playlist, dancePlaylists, savedPlaylists, settings, sessionRule])
+  }, [tracks, playlist, dancePlaylists, savedPlaylists, settings, sessionRule, dancePlaylistSorts])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -321,6 +407,21 @@ function App() {
 
     setImportProgress({ done: 0, total: filesToImport.length })
 
+    // ── Grok batch parse (one API call for all files) ────────────────────────
+    let grokResults: (GrokTrackInfo | null)[] = filesToImport.map(() => null)
+    if (settings.grokApiKey && navigator.onLine) {
+      try {
+        setStatus(`🤖 Asking Grok to identify ${filesToImport.length} file(s)…`)
+        grokResults = await parseFilenamesWithGrok(
+          filesToImport.map((f) => f.name.replace(/\.[^.]+$/, '')),
+          settings.grokApiKey,
+        )
+        console.log('🤖 Grok batch results:', grokResults)
+      } catch (err) {
+        console.warn('Grok batch parse failed, falling back to local analysis:', err)
+      }
+    }
+
     const imported: Track[] = []
     const importedMap: Record<string, File | undefined> = {}
 
@@ -341,12 +442,19 @@ function App() {
       URL.revokeObjectURL(temporaryUrl)
 
       const rawName = file.name.replace(/\.[^.]+$/, '')
-      const { title: parsedTitle, artist: parsedArtist } = extractArtistFromFilename(rawName)
+      const { title: regexTitle, artist: regexArtist, danceHint: regexDanceHint } = extractArtistFromFilename(rawName)
+
+      // Merge Grok result (if available) with regex result — Grok wins on title/artist/dance
+      const grok = grokResults[i]
+      const parsedTitle = grok?.title ?? regexTitle
+      const parsedArtist = grok?.artist ?? regexArtist
+      const danceHint = grok?.danceType ?? regexDanceHint
 
       // Step 1: quick local analysis from filename
       const localAnalysis = await analyzeTrackRhythm(file, {
         title: rawName,
         fileName: file.name,
+        danceHint,
       })
 
       // Step 2: MusicBrainz web lookup (non-blocking, best-effort, only when online)
@@ -369,6 +477,7 @@ function App() {
               artist: mbResult.artist,
               fileName: file.name,
               genres: mbResult.genres,
+              danceHint,
             })
             // Only upgrade dance type if the enriched run is more confident
             if (enrichedAnalysis.confidence > localAnalysis.confidence) {
@@ -389,8 +498,8 @@ function App() {
         danceType,
         analysisConfidence: finalConfidence,
         hasCachedAudio: true,
-        qualityRating: 3,
-        rhythmRating: 3,
+        qualityRating: 0,
+        rhythmRating: 0,
         durationSec,
         cueStartSec: 0,
         targetPlaytimeSec: WDSF_2025_DEFAULT_PLAYTIMES[danceType],
@@ -1231,16 +1340,17 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header className="hero">
-        <p className="kicker">DancePlayer PWA</p>
-        <h1>Practice Engine</h1>
-        <p className="subtitle">
-          Local-first dance playback with WDSF timing, smart breaks, and English/German voice commands.
-        </p>
-        <div className="status-row">
+      <header className="hero" style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
+        <img src={danceShapeUrl} alt="Dance Shape" style={{ height: '75px', width: 'auto', borderRadius: '12px', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.3))' }} />
+        <div style={{ flex: 1, minWidth: '200px' }}>
+          <p className="kicker">DancePlayer PWA</p>
+          <h1 style={{ margin: '4px 0 8px' }}>Dance Player</h1>
+          <p className="subtitle">
+            Local-first dance playback with smart breaks, pitch control and voice commands.
+          </p>
+        </div>
+        <div className="status-row" style={{ width: '100%', margin: '8px 0 0' }}>
           <span className="status-pill">{status}</span>
-          <span className="status-pill">Speed {settings.speedPct}%</span>
-          <span className="status-pill">Mode {settings.wdsfTimedMode ? 'WDSF timed' : 'Full song'}</span>
         </div>
       </header>
 
@@ -1286,6 +1396,19 @@ function App() {
                   }}
                 >
                   ✦ Clean Titles
+                </button>
+              )}
+              {tracks.length > 0 && (
+                <button
+                  type="button"
+                  title="Reset all track ratings to zero stars"
+                  onClick={() => {
+                    if (!window.confirm('Reset ratings for ALL songs to zero stars?')) return
+                    setTracks((prev) => prev.map((t) => ({ ...t, qualityRating: 0, rhythmRating: 0 })))
+                    setStatus('All track ratings reset to zero stars.')
+                  }}
+                >
+                  ☆ Reset Ratings
                 </button>
               )}
               <button type="button" onClick={selectAllFiltered}>
@@ -1426,9 +1549,34 @@ function App() {
                   <div key={entry.id} className="qe-row">
                     <span className="qe-num">{idx + 1}</span>
                     <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>{DANCE_ABBR[t.danceType]}</span>
-                    <span className="qe-info">
+                    <span className="qe-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                       <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
-                      {t.artist && <span className="qe-artist">{t.artist}</span>}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.8rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
+                          {[1, 2, 3, 4, 5].map((star) => {
+                            const isFilled = star <= (t.qualityRating ?? 0)
+                            return (
+                              <span
+                                key={star}
+                                onClick={() => {
+                                  const newRating = t.qualityRating === star ? 0 : star
+                                  updateTrack(t.id, { qualityRating: newRating })
+                                }}
+                                style={{
+                                  cursor: 'pointer',
+                                  color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
+                                  padding: '0 1px',
+                                  display: 'inline-block',
+                                }}
+                                title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                              >
+                                ★
+                              </span>
+                            )
+                          })}
+                        </div>
+                        {t.artist && <span className="qe-artist" style={{ margin: 0 }}>{t.artist}</span>}
+                      </div>
                     </span>
                     <div className="qe-actions">
                       <button type="button" onClick={() => moveCurrentEntry(idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
@@ -1497,9 +1645,34 @@ function App() {
                           <div key={entry.id} className="qe-row">
                             <span className="qe-num">{idx + 1}</span>
                             <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>{DANCE_ABBR[t.danceType]}</span>
-                            <span className="qe-info">
+                            <span className="qe-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                               <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
-                              {t.artist && <span className="qe-artist">{t.artist}</span>}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.8rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
+                                  {[1, 2, 3, 4, 5].map((star) => {
+                                    const isFilled = star <= (t.qualityRating ?? 0)
+                                    return (
+                                      <span
+                                        key={star}
+                                        onClick={() => {
+                                          const newRating = t.qualityRating === star ? 0 : star
+                                          updateTrack(t.id, { qualityRating: newRating })
+                                        }}
+                                        style={{
+                                          cursor: 'pointer',
+                                          color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
+                                          padding: '0 1px',
+                                          display: 'inline-block',
+                                        }}
+                                        title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                                      >
+                                        ★
+                                      </span>
+                                    )
+                                  })}
+                                </div>
+                                {t.artist && <span className="qe-artist" style={{ margin: 0 }}>{t.artist}</span>}
+                              </div>
                             </span>
                             <div className="qe-actions">
                               <button type="button" onClick={() => moveSavedEntry(sp.id, idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
@@ -1779,10 +1952,35 @@ function App() {
                       <span className="dance-badge pq-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>
                         {DANCE_ABBR[t.danceType]}
                       </span>
-                      <span className="pq-info">
+                      <span className="pq-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                         {isActive && <span className="pq-now-playing-label">▶ Now playing</span>}
                         <span className="pq-title">{cleanDisplayTitle(t.title)}</span>
-                        {t.artist && <span className="pq-artist">{t.artist}</span>}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.8rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
+                            {[1, 2, 3, 4, 5].map((star) => {
+                              const isFilled = star <= (t.qualityRating ?? 0)
+                              return (
+                                <span
+                                  key={star}
+                                  onClick={() => {
+                                    const newRating = t.qualityRating === star ? 0 : star
+                                    updateTrack(t.id, { qualityRating: newRating })
+                                  }}
+                                  style={{
+                                    cursor: 'pointer',
+                                    color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
+                                    padding: '0 1px',
+                                    display: 'inline-block',
+                                  }}
+                                  title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                                >
+                                  ★
+                                </span>
+                              )
+                            })}
+                          </div>
+                          {t.artist && <span className="pq-artist" style={{ margin: 0 }}>{t.artist}</span>}
+                        </div>
                         {isActive && (
                           <div className="pq-progress-bar">
                             <div className="pq-progress-fill pq-track-fill" style={{ width: `${Math.round(trackProgress * 100)}%` }} />
@@ -1892,6 +2090,7 @@ function App() {
             {catPlaylists.map((dp) => {
               const color = DANCE_COLORS[dp.name as DanceType] ?? '#555'
               const isOpen = openDanceCards.has(dp.id) || dp.name === activeDanceType
+              const sortMode = dancePlaylistSorts[dp.id] ?? 'name'
               return (
                 <details
                   key={dp.id}
@@ -1908,91 +2107,155 @@ function App() {
                 >
                   <summary className="dance-playlist-card-header" style={{ background: color }}>
                     <span className="dance-playlist-card-title">{dp.name}</span>
-                    <span className="dance-playlist-card-count">{dp.entries.length} track{dp.entries.length !== 1 ? 's' : ''}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} onClick={(e) => e.stopPropagation()}>
+                      <span className="dance-playlist-card-count">{dp.entries.length} track{dp.entries.length !== 1 ? 's' : ''}</span>
+                      <div style={{ display: 'inline-flex', gap: '2px', background: 'rgba(0,0,0,0.22)', borderRadius: '5px', padding: '2px' }}>
+                        <button
+                          type="button"
+                          title="Sort by Name"
+                          onClick={() => setDancePlaylistSorts((prev) => ({ ...prev, [dp.id]: 'name' }))}
+                          style={{
+                            padding: '3px',
+                            border: 'none',
+                            background: sortMode === 'name' ? 'rgba(255,255,255,0.25)' : 'transparent',
+                            color: '#fff',
+                            cursor: 'pointer',
+                            borderRadius: '3px',
+                            lineHeight: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                            <path d="M4 6h9M4 12h7M4 18h7M17 6v12M17 18l-3-3M17 18l3-3" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          title="Sort by Stars"
+                          onClick={() => setDancePlaylistSorts((prev) => ({ ...prev, [dp.id]: 'stars' }))}
+                          style={{
+                            padding: '3px',
+                            border: 'none',
+                            background: sortMode === 'stars' ? 'rgba(255,255,255,0.25)' : 'transparent',
+                            color: '#fff',
+                            cursor: 'pointer',
+                            borderRadius: '3px',
+                            lineHeight: 1,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
                   </summary>
                   <div className="dance-playlist-tracks">
-                    {dp.entries.map((entry, idx) => {
-                      if (entry.type !== 'track') return null
-                      const t = tracksById[entry.trackId]
-                      if (!t) return null
-                      return (
-                        <div key={entry.id} className="dance-playlist-track-row">
-                          <span className="dance-track-num">{idx + 1}</span>
-                          <div className="dance-track-info">
-                            <span className="dance-track-title">{cleanDisplayTitle(t.title)}</span>
-                            <span className="dance-track-artist">{t.artist ?? '\u00a0'}</span>
-                          </div>
-                          {expandedEntryId === entry.id ? (
-                            <div className="track-row-actions">
-                              <button
-                                type="button"
-                                className={previewingTrackId === entry.trackId ? 'previewing' : ''}
-                                title={previewingTrackId === entry.trackId ? 'Stop preview' : 'Preview'}
-                                onClick={(e) => { e.stopPropagation(); void togglePreview(entry.trackId) }}
-                              >{previewingTrackId === entry.trackId ? '■' : '▶'}</button>
-                              <button
-                                type="button"
-                                title="Add to queue"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setPlaylist((prev) => ({
-                                    ...prev,
-                                    entries: [...prev.entries, { id: createId('entry-track'), type: 'track' as const, trackId: entry.trackId }],
-                                  }))
-                                  setStatus(`Added \u201c${t.title}\u201d to playlist.`)
-                                  setExpandedEntryId(null)
-                                }}
-                              >+</button>
-                              <button
-                                type="button"
-                                title="Remove from dance playlist"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setDancePlaylists((prev) => prev.map((p) =>
-                                    p.id === dp.id
-                                      ? { ...p, entries: p.entries.filter((en) => en.id !== entry.id) }
-                                      : p
-                                  ))
-                                  setStatus(`Removed \u201c${t.title}\u201d from ${dp.name}.`)
-                                  setExpandedEntryId(null)
-                                }}
-                              >✕</button>
-                              <button
-                                type="button"
-                                onClick={(e) => { e.stopPropagation(); setExpandedEntryId(null) }}
-                              >✕ close</button>
-                            </div>
-                          ) : (
+                    {(() => {
+                      const sorted = [...dp.entries].sort((a, b) => {
+                        if (a.type !== 'track' || b.type !== 'track') return 0
+                        const trackA = tracksById[a.trackId]
+                        const trackB = tracksById[b.trackId]
+                        if (!trackA || !trackB) return 0
+                        if (sortMode === 'stars') {
+                          const diff = (trackB.qualityRating ?? 0) - (trackA.qualityRating ?? 0)
+                          if (diff !== 0) return diff
+                        }
+                        return cleanDisplayTitle(trackA.title).localeCompare(cleanDisplayTitle(trackB.title))
+                      })
+                      return sorted.map((entry, idx) => {
+                        if (entry.type !== 'track') return null
+                        const t = tracksById[entry.trackId]
+                        if (!t) return null
+                        const isMarked = playlist.entries.some((e) => e.type === 'track' && e.trackId === entry.trackId)
+                        return (
+                          <div key={entry.id} className={`dance-playlist-track-row ${isMarked ? 'marked' : ''}`}>
                             <button
                               type="button"
-                              className="track-row-menu-btn"
-                              onClick={(e) => { e.stopPropagation(); setExpandedEntryId(entry.id) }}
-                            >⋯</button>
-                          )}
-                          <button
-                            type="button"
-                            className="track-row-pencil-btn"
-                            title="Edit track"
-                            onClick={(e) => { e.stopPropagation(); setEditingTrackId(t.id) }}
-                          >✎</button>
+                              title="Add to queue"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setPlaylist((prev) => ({
+                                  ...prev,
+                                  entries: [...prev.entries, { id: createId('entry-track'), type: 'track' as const, trackId: entry.trackId }],
+                                }))
+                                setStatus(`Added \u201c${t.title}\u201d to playlist.`)
+                              }}
+                              style={{
+                                border: `1.5px solid ${isMarked ? 'var(--ok)' : '#7a8a95'}`,
+                                borderRadius: '50%',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '24px',
+                                height: '24px',
+                                minWidth: '24px',
+                                padding: 0,
+                                background: isMarked ? 'var(--ok)' : 'transparent',
+                                color: isMarked ? '#fff' : '#7a8a95',
+                                fontWeight: 'bold',
+                                fontSize: '0.85rem',
+                                cursor: 'pointer',
+                                transition: 'all 0.12s',
+                                flexShrink: 0,
+                                outline: 'none',
+                                lineHeight: 1,
+                                marginRight: '4px',
+                              }}
+                            >
+                              {idx + 1}
+                            </button>
+                              <div className="dance-track-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                <span className="dance-track-title">{cleanDisplayTitle(t.title)}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.85rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
+                                    {[1, 2, 3, 4, 5].map((star) => {
+                                      const isFilled = star <= (t.qualityRating ?? 0)
+                                      return (
+                                        <span
+                                          key={star}
+                                          onClick={() => {
+                                            const newRating = t.qualityRating === star ? 0 : star
+                                            updateTrack(t.id, { qualityRating: newRating })
+                                          }}
+                                          style={{
+                                            cursor: 'pointer',
+                                            color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
+                                            padding: '0 1px',
+                                            display: 'inline-block',
+                                          }}
+                                          title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                                        >
+                                          ★
+                                        </span>
+                                      )
+                                    })}
+                                  </div>
+                                  <span className="dance-track-artist" style={{ margin: 0 }}>{t.artist ?? '\u00a0'}</span>
+                                </div>
+                              </div>
+                            <button
+                              type="button"
+                              className={previewingTrackId === entry.trackId ? 'previewing' : ''}
+                              title={previewingTrackId === entry.trackId ? 'Stop preview' : 'Preview'}
+                              onClick={(e) => { e.stopPropagation(); void togglePreview(entry.trackId) }}
+                              style={{ marginRight: '4px' }}
+                            >{previewingTrackId === entry.trackId ? '■' : '▶'}</button>
+                            <button
+                              type="button"
+                              className="track-row-pencil-btn"
+                              title="Edit track"
+                              onClick={(e) => { e.stopPropagation(); setEditingTrackId(t.id) }}
+                            >✎</button>
                         </div>
                       )
-                    })}
-                  </div>
-                  <div className="dance-playlist-card-footer">
-                    <button
-                      type="button"
-                      className="cta"
-                      onClick={() => {
-                        const newEntries: PlaylistEntry[] = dp.entries
-                          .filter((e): e is { id: string; type: 'track'; trackId: string } => e.type === 'track')
-                          .map((e) => ({ id: createId('entry-track'), type: 'track' as const, trackId: e.trackId }))
-                        setPlaylist((prev) => ({ ...prev, entries: [...prev.entries, ...newEntries] }))
-                        setStatus(`Added all ${dp.entries.length} ${dp.name} track(s) to playlist.`)
-                      }}
-                    >
-                      Add all to playlist
-                    </button>
+                    })
+                  })()}
                   </div>
                 </details>
               )
@@ -2033,46 +2296,77 @@ function App() {
         const t = tracks.find((tr) => tr.id === editingTrackId)
         if (!t) return null
         return (
-          <div className="edit-modal-overlay" onClick={() => setEditingTrackId(null)}>
+          <div className="edit-modal-overlay" onClick={() => {
+            const pa = previewAudioRef.current
+            if (!pa.paused) {
+              pa.pause()
+              if (previewObjectUrlRef.current) {
+                URL.revokeObjectURL(previewObjectUrlRef.current)
+                previewObjectUrlRef.current = null
+              }
+              setPreviewingTrackId(null)
+            }
+            setEditingTrackId(null)
+          }}>
             <div className="edit-modal" onClick={(e) => e.stopPropagation()}>
-              <h3 className="edit-modal-title">Edit Track</h3>
+              <h3 className="edit-modal-title" style={{ marginBottom: '2px' }}>Edit Track</h3>
               {t.filename && (
-                <label className="edit-modal-field">
-                  <span className="edit-modal-label">File</span>
-                  <input type="text" readOnly value={t.filename} className="edit-modal-input readonly" />
-                </label>
+                <div style={{ fontSize: '0.72rem', color: '#8a9aa3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: '2px' }}>
+                  File: {t.filename}
+                </div>
               )}
-              <label className="edit-modal-field">
-                <span className="edit-modal-label">Title</span>
-                <input
-                  type="text"
-                  className="edit-modal-input"
-                  value={t.title}
-                  onChange={(e) => updateTrack(t.id, { title: e.target.value })}
-                />
-              </label>
-              <label className="edit-modal-field">
-                <span className="edit-modal-label">Artist</span>
-                <input
-                  type="text"
-                  className="edit-modal-input"
-                  value={t.artist ?? ''}
-                  placeholder="Artist name"
-                  onChange={(e) => updateTrack(t.id, { artist: e.target.value || undefined })}
-                />
-              </label>
-              <label className="edit-modal-field">
-                <span className="edit-modal-label">Dance</span>
-                <select
-                  className="edit-modal-input"
-                  value={t.danceType}
-                  onChange={(e) => updateTrack(t.id, { danceType: e.target.value as DanceType })}
-                >
-                  {DANCES.map((d) => (
-                    <option key={d} value={d}>{d}</option>
-                  ))}
-                </select>
-              </label>
+              <div className="edit-modal-row">
+                <label className="edit-modal-field half">
+                  <span className="edit-modal-label">Title</span>
+                  <input
+                    type="text"
+                    className="edit-modal-input"
+                    value={t.title}
+                    onChange={(e) => updateTrack(t.id, { title: e.target.value })}
+                  />
+                </label>
+                <label className="edit-modal-field half">
+                  <span className="edit-modal-label">Artist</span>
+                  <input
+                    type="text"
+                    className="edit-modal-input"
+                    value={t.artist ?? ''}
+                    placeholder="Artist name"
+                    onChange={(e) => updateTrack(t.id, { artist: e.target.value || undefined })}
+                  />
+                </label>
+              </div>
+              <div className="edit-modal-row" style={{ alignItems: 'center' }}>
+                <label className="edit-modal-field half">
+                  <span className="edit-modal-label">Dance</span>
+                  <select
+                    className="edit-modal-input"
+                    value={t.danceType}
+                    onChange={(e) => updateTrack(t.id, { danceType: e.target.value as DanceType })}
+                  >
+                    {DANCES.map((d) => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="edit-modal-field half">
+                  <span className="edit-modal-label">Rating</span>
+                  <div style={{ display: 'flex', gap: '5px', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--sun)', userSelect: 'none', margin: '2px 0' }}>
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <span
+                        key={star}
+                        onClick={() => {
+                          const newRating = t.qualityRating === star ? 0 : star
+                          updateTrack(t.id, { qualityRating: newRating })
+                        }}
+                        title={`${star} Star${star > 1 ? 's' : ''}`}
+                      >
+                        {star <= (t.qualityRating ?? 0) ? '★' : '☆'}
+                      </span>
+                    ))}
+                  </div>
+                </label>
+              </div>
               <div className="edit-modal-row">
                 <label className="edit-modal-field half">
                   <span className="edit-modal-label">Cue (s)</span>
@@ -2099,7 +2393,103 @@ function App() {
                   />
                 </label>
               </div>
-              <button type="button" className="edit-modal-close cta" onClick={() => setEditingTrackId(null)}>
+              <div className="edit-modal-player" style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px', padding: '10px', background: 'var(--sand)', borderRadius: '10px' }}>
+                <span className="edit-modal-label" style={{ fontWeight: 'bold' }}>Test Playback</span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    type="button"
+                    onClick={() => void togglePreview(t.id)}
+                    className={previewingTrackId === t.id ? 'live' : ''}
+                    style={{ flex: 1 }}
+                  >
+                    {previewingTrackId === t.id ? '⏹ Stop' : '▶ Play (from Cue)'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const pa = previewAudioRef.current
+                      if (!pa.paused) {
+                        pa.currentTime = 0
+                      } else {
+                        void togglePreview(t.id).then(() => {
+                          previewAudioRef.current.currentTime = 0
+                        })
+                      }
+                    }}
+                    style={{ flex: 1 }}
+                  >
+                    ⏮ From Start
+                  </button>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.8rem', marginTop: '4px' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const pa = previewAudioRef.current
+                      if (!pa.paused) {
+                        pa.currentTime = Math.max(0, pa.currentTime - 5)
+                      }
+                    }}
+                    disabled={previewingTrackId !== t.id}
+                  >
+                    -5s
+                  </button>
+                  <span>Seek Preview</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const pa = previewAudioRef.current
+                      if (!pa.paused) {
+                        pa.currentTime = Math.min(pa.duration || 9999, pa.currentTime + 5)
+                      }
+                    }}
+                    disabled={previewingTrackId !== t.id}
+                  >
+                    +5s
+                  </button>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn-danger"
+                style={{ marginTop: '8px', width: '100%', marginBottom: '4px' }}
+                onClick={() => {
+                  if (!window.confirm(`Remove "${t.title}" from Dance Playlists?`)) return
+                  const pa = previewAudioRef.current
+                  if (!pa.paused) {
+                    pa.pause()
+                    if (previewObjectUrlRef.current) {
+                      URL.revokeObjectURL(previewObjectUrlRef.current)
+                      previewObjectUrlRef.current = null
+                    }
+                    setPreviewingTrackId(null)
+                  }
+                  setDancePlaylists((prev) => prev.map((p) => ({
+                    ...p,
+                    entries: p.entries.filter((en) => en.type !== 'track' || en.trackId !== t.id)
+                  })))
+                  setStatus(`Removed \u201c${t.title}\u201d from Dance Playlists.`)
+                  setEditingTrackId(null)
+                }}
+              >
+                ✕ Remove from Dance Playlist
+              </button>
+              <button
+                type="button"
+                className="edit-modal-close cta"
+                onClick={() => {
+                  const pa = previewAudioRef.current
+                  if (!pa.paused) {
+                    pa.pause()
+                    if (previewObjectUrlRef.current) {
+                      URL.revokeObjectURL(previewObjectUrlRef.current)
+                      previewObjectUrlRef.current = null
+                    }
+                    setPreviewingTrackId(null)
+                  }
+                  setEditingTrackId(null)
+                }}
+              >
                 Done
               </button>
             </div>
