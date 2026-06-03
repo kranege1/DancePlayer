@@ -68,7 +68,7 @@ interface PersistedState {
 
 const initialSettings: AppSettings = {
   speedPct: 0,
-  wdsfTimedMode: true,
+  wdsfTimedMode: false,
   language: 'en',
 }
 
@@ -83,7 +83,7 @@ const initialSessionRule: SessionRule = {
   autoBreakEnabled: true,
   breakDurationSec: 30,
   breakMode: 'countdown',
-  announcementEnabled: true,
+  announcementEnabled: false,
 }
 
 function createId(prefix: string) {
@@ -280,6 +280,8 @@ function App() {
   const [previewingTrackId, setPreviewingTrackId] = useState<string | null>(null)
   const [previewCurrentTime, setPreviewCurrentTime] = useState(0)
   const [previewDuration, setPreviewDuration] = useState(0)
+  const [mainCurrentTime, setMainCurrentTime] = useState(0)
+  const [mainDuration, setMainDuration] = useState(0)
   const [openDanceCards, setOpenDanceCards] = useState<Set<string>>(new Set())
 
   const [fileMap, setFileMap] = useState<Record<string, File | undefined>>({})
@@ -290,6 +292,7 @@ function App() {
   const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>(() => persistedState.savedPlaylists ?? [])
   const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('songs')
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
   // Tracks whether the user *intends* listening to stay on — used for safe auto-restart on iOS
@@ -303,6 +306,7 @@ function App() {
   const breakTickRef = useRef<number | null>(null)
   const breakAudioCtxRef = useRef<AudioContext | null>(null)
   const applauseAudioRefs = useRef<HTMLAudioElement[]>([])
+  const applauseTimeoutRef = useRef<number | null>(null)
   // Persistent AudioContext + decoded buffer — created once on first user gesture, reused for all applause
   const sharedAudioCtxRef = useRef<AudioContext | null>(null)
   const applauseBufferRef = useRef<AudioBuffer | null>(null)
@@ -834,9 +838,14 @@ function App() {
 
     // ── Countdown ───────────────────────────────────────────────────
     if (rule.breakMode === 'countdown') {
-      for (let t = dur; t >= 0; t -= 10) {
-        window.setTimeout(() => { if (t === 0 || t === 5 || t % 10 === 0) speak(String(t)) }, (dur - t) * 1000)
+      const timesToSpeak = [0]
+      if (dur >= 5) timesToSpeak.push(5)
+      for (let s = 10; s <= dur; s += 10) {
+        if (!timesToSpeak.includes(s)) timesToSpeak.push(s)
       }
+      timesToSpeak.forEach((t) => {
+        window.setTimeout(() => { speak(String(t)) }, (dur - t) * 1000)
+      })
     }
 
     // ── Tick + advance ──────────────────────────────────────────────
@@ -947,12 +956,14 @@ function App() {
       return
     }
 
-    // ── Applause: first burst immediately, second after durationSec ──
+    // ── Applause: first burst immediately, second 3 seconds before break ends ──
     // Uses the shared AudioContext (already unlocked by user gesture) — works on iOS.
     playApplauseBurst()
-    const t = window.setTimeout(() => { playApplauseBurst() }, durationSec * 1000)
-    // Track the timeout so it can be cancelled if the break is aborted
-    void t
+    const delay = Math.max(0, (durationSec - 3) * 1000)
+    applauseTimeoutRef.current = window.setTimeout(() => {
+      playApplauseBurst()
+      applauseTimeoutRef.current = null
+    }, delay)
   }
 
   function speak(text: string): Promise<void> {
@@ -983,6 +994,10 @@ function App() {
     if (breakTickRef.current) {
       window.clearInterval(breakTickRef.current)
       breakTickRef.current = null
+    }
+    if (applauseTimeoutRef.current) {
+      window.clearTimeout(applauseTimeoutRef.current)
+      applauseTimeoutRef.current = null
     }
     if (trackProgressRef.current) {
       cancelAnimationFrame(trackProgressRef.current)
@@ -1037,12 +1052,15 @@ function App() {
 
       // ── Countdown speech ────────────────────────────────────────────
       if (entry.breakItem.mode === 'countdown') {
-        for (let t = dur; t >= 0; t -= 10) {
-          const delay = (dur - t) * 1000
-          window.setTimeout(() => {
-            if (t === 0 || t === 5 || t % 10 === 0) speak(String(t))
-          }, delay)
+        const timesToSpeak = [0]
+        if (dur >= 5) timesToSpeak.push(5)
+        for (let s = 10; s <= dur; s += 10) {
+          if (!timesToSpeak.includes(s)) timesToSpeak.push(s)
         }
+        timesToSpeak.forEach((t) => {
+          const delay = (dur - t) * 1000
+          window.setTimeout(() => { speak(String(t)) }, delay)
+        })
       }
 
       // ── Per-second tick (drives breakSecondsLeft) ───────────────────
@@ -1159,6 +1177,22 @@ function App() {
     setStatus(`Playing ${track.title} (${track.danceType})`)
   }
 
+  function togglePlayPause() {
+    const audio = audioRef.current
+    if (!audio) return
+    ensureAudioCtx()
+    void ensureApplauseBuffer()
+    if (audio.src && audio.src !== '' && !audio.src.endsWith('/')) {
+      if (audio.paused) {
+        void audio.play().catch(() => null)
+      } else {
+        audio.pause()
+      }
+    } else {
+      playFromStart()
+    }
+  }
+
   function playFromStart() {
     if (!playableEntries.length) {
       setStatus('No playlist entries to play.')
@@ -1175,7 +1209,12 @@ function App() {
       playFromStart()
       return
     }
-    void playEntryByIndex(currentIndex + 1)
+    const rule = sessionRuleRef.current
+    if (currentTrack && !breakInfo && rule.autoBreakEnabled) {
+      runBreakThenAdvance(currentIndex + 1, rule)
+    } else {
+      void playEntryByIndex(currentIndex + 1)
+    }
   }
 
   function playNextDance(danceType: DanceType) {
@@ -1781,168 +1820,274 @@ function App() {
             })()}
           </div>
 
-          <audio ref={audioRef} controls className="audio-player" />
+          <audio
+            ref={audioRef}
+            style={{ display: 'none' }}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onEnded={() => setIsPlaying(false)}
+            onTimeUpdate={(e) => {
+              setMainCurrentTime(e.currentTarget.currentTime)
+              setMainDuration(e.currentTarget.duration || 0)
+            }}
+            onDurationChange={(e) => {
+              setMainDuration(e.currentTarget.duration || 0)
+            }}
+          />
 
-          {/* Now-playing strip — shows track OR break info */}
-          {breakInfo ? (
-            <div className="now-playing-strip now-playing-break">
-              <div className="now-playing-info">
-                <span className="now-playing-title">
-                  {breakInfo.mode === 'applause' ? '👏 Applause break' : breakInfo.mode === 'countdown' ? '⏳ Countdown break' : '🔇 Silence break'}
+          {/* Main Now Playing Panel / Card */}
+          <div className="now-playing-card" style={{
+            background: 'linear-gradient(135deg, #0b1f2a 0%, #17323f 100%)',
+            color: '#fff9ef',
+            borderRadius: '16px',
+            padding: '16px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+            marginBottom: '16px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '12px'
+          }}>
+            {/* Now-playing strip inside card */}
+            {breakInfo ? (
+              <div className="now-playing-strip now-playing-break" style={{ background: 'rgba(253, 230, 138, 0.15)', borderColor: 'rgba(240, 192, 64, 0.3)', color: '#fff9ef', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 12px', margin: 0 }}>
+                <div className="now-playing-info">
+                  <span className="now-playing-title" style={{ color: '#ffd56b' }}>
+                    {breakInfo.mode === 'applause' ? '👏 Applause break' : breakInfo.mode === 'countdown' ? '⏳ Countdown break' : '🔇 Silence break'}
+                  </span>
+                  <span className="now-playing-artist" style={{ color: '#dbeafe' }}>
+                    {breakSecondsLeft !== null ? `${breakSecondsLeft}s remaining` : '…'}
+                  </span>
+                  <div className="now-playing-breakbar" style={{ background: 'rgba(255,255,255,0.1)' }}>
+                    <div
+                      className="now-playing-breakbar-fill"
+                      style={{ width: `${breakSecondsLeft !== null ? (breakSecondsLeft / breakInfo.totalSec) * 100 : 0}%`, background: '#ffd56b' }}
+                    />
+                  </div>
+                </div>
+                <span className="now-playing-break-badge" style={{ background: '#ffd56b', color: '#17323f' }}>{breakInfo.totalSec}s</span>
+              </div>
+            ) : currentTrack ? (
+              <div className="now-playing-strip" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 12px', margin: 0 }}>
+                <div className="now-playing-info">
+                  <span className="now-playing-title" style={{ color: '#fff' }}>{cleanDisplayTitle(currentTrack.title)}</span>
+                  {currentTrack.artist && <span className="now-playing-artist" style={{ color: '#a0b2bd' }}>{currentTrack.artist}</span>}
+                </div>
+                <span className="dance-badge now-playing-badge" style={{ background: DANCE_COLORS[currentTrack.danceType] }}>
+                  {currentTrack.danceType}
                 </span>
-                <span className="now-playing-artist">
-                  {breakSecondsLeft !== null ? `${breakSecondsLeft}s remaining` : '…'}
-                </span>
-                <div className="now-playing-breakbar">
-                  <div
-                    className="now-playing-breakbar-fill"
-                    style={{ width: `${breakSecondsLeft !== null ? (breakSecondsLeft / breakInfo.totalSec) * 100 : 0}%` }}
+              </div>
+            ) : (
+              <div className="now-playing-strip now-playing-empty" style={{ background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)', color: '#8a9aa3', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '12px' }}>
+                No track playing
+              </div>
+            )}
+
+            {/* Unified Song Progress Bar */}
+            {currentTrack && (() => {
+              const dur = mainDuration || currentTrack.durationSec || 120
+              const cur = mainCurrentTime || 0
+              
+              // Formatting function for MM:SS
+              const fmtSec = (s: number) => {
+                const mins = Math.floor(Math.max(0, s) / 60)
+                const secs = Math.floor(Math.max(0, s) % 60)
+                return `${mins}:${String(secs).padStart(2, '0')}`
+              }
+
+              if (settings.wdsfTimedMode) {
+                // In timed mode, progress runs from cueStartSec to cueStartSec + targetPlaytimeSec
+                const cueStart = currentTrack.cueStartSec || 0
+                const targetTime = currentTrack.targetPlaytimeSec || 90
+                const limitTime = Math.min(dur, cueStart + targetTime)
+                const timeLeft = Math.max(0, limitTime - cur)
+                
+                // Show the WDSF cue markers inside the bar
+                const cuePos = (cueStart / dur) * 100
+                const endPos = (limitTime / dur) * 100
+                const fullPct = Math.min(100, Math.max(0, (cur / dur) * 100))
+
+                return (
+                  <div className="cue-bar-wrap" style={{ margin: '4px 0 2px' }}>
+                    <div className="cue-bar" style={{ background: 'rgba(255,255,255,0.15)', height: '8px', borderRadius: '4px', position: 'relative' }}>
+                      <div className="cue-bar-active" style={{ position: 'absolute', height: '100%', left: `${cuePos}%`, width: `${endPos - cuePos}%`, background: '#4cd8b0', opacity: 0.3 }} />
+                      <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${fullPct}%`, background: '#4cd8b0', borderRadius: '4px' }} />
+                      <div className="cue-marker cue-marker-start" style={{ position: 'absolute', left: `${cuePos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px' }} title={`Cue: ${fmtSec(cueStart)}`} />
+                      <div className="cue-marker cue-marker-end" style={{ position: 'absolute', left: `${endPos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px' }} title={`End: ${fmtSec(limitTime)}`} />
+                    </div>
+                    <div className="cue-bar-labels" style={{ display: 'flex', justifyContent: 'space-between', color: '#a0b2bd', fontSize: '0.75rem', marginTop: '4px' }}>
+                      <span>▶ {fmtSec(cur)} / {fmtSec(limitTime)} (Cue: {fmtSec(cueStart)})</span>
+                      <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
+                    </div>
+                  </div>
+                )
+              } else {
+                // In untimed mode, progress runs from 0 to dur (full song)
+                const pct = Math.min(100, Math.max(0, (cur / dur) * 100))
+                const timeLeft = Math.max(0, dur - cur)
+
+                return (
+                  <div className="cue-bar-wrap" style={{ margin: '4px 0 2px' }}>
+                    <div className="cue-bar" style={{ background: 'rgba(255,255,255,0.15)', height: '8px', borderRadius: '4px', position: 'relative', overflow: 'hidden' }}>
+                      <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${pct}%`, background: '#4cd8b0' }} />
+                    </div>
+                    <div className="cue-bar-labels" style={{ display: 'flex', justifyContent: 'space-between', color: '#a0b2bd', fontSize: '0.75rem', marginTop: '4px' }}>
+                      <span>▶ {fmtSec(cur)} / {fmtSec(dur)}</span>
+                      <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
+                    </div>
+                  </div>
+                )
+              }
+            })()}
+
+            {/* Custom playback controls inside card */}
+            <div className="player-controls" style={{ display: 'flex', gap: '8px', justifyContent: 'center', margin: '4px 0', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="ctrl-btn main-play-btn"
+                title={isPlaying ? "Pause" : "Play"}
+                onClick={togglePlayPause}
+                style={{
+                  background: isPlaying ? '#00b06b' : '#0c6b69',
+                  color: '#fff',
+                  borderColor: 'rgba(255,255,255,0.15)',
+                  fontSize: '1.1rem',
+                  padding: '8px 20px',
+                  borderRadius: '12px',
+                  flex: '1 1 100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 'bold',
+                  transition: 'background 0.2s'
+                }}
+              >
+                {isPlaying ? '⏸ Pause' : '▶ Play'}
+              </button>
+              <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="Restart track" onClick={repeatSong}>↺ Restart</button>
+              <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="−15 seconds" onClick={() => seekBy(-15)}>-15s</button>
+              <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="+15 seconds" onClick={() => seekBy(15)}>+15s</button>
+              <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="Next track" onClick={nextSong}>⏭ Next</button>
+            </div>
+
+            {/* Speed row inside card */}
+            <div className="player-speed-row" style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0 0' }}>
+              <button type="button" className="ctrl-btn speed-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', padding: '5px 10px' }} onClick={() => applySpeedDelta(-10)}>−10%</button>
+              <input
+                type="range"
+                className="speed-slider"
+                style={{ flex: 1 }}
+                min={-50}
+                max={50}
+                value={settings.speedPct}
+                onChange={(e) => setSettings((prev) => ({ ...prev, speedPct: clampSpeed(Number(e.target.value)) }))}
+              />
+              <button type="button" className="ctrl-btn speed-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', padding: '5px 10px' }} onClick={() => applySpeedDelta(10)}>+10%</button>
+              <span className="speed-label" style={{ color: '#fff9ef', fontSize: '0.85rem', minWidth: '45px', textAlign: 'right' }}>{settings.speedPct > 0 ? '+' : ''}{settings.speedPct}%</span>
+            </div>
+          </div>
+
+          {/* Settings & Automation collapsible card */}
+          <details className="settings-automation-card" style={{
+            background: 'linear-gradient(135deg, #102430 0%, #1c3d4e 100%)',
+            color: '#fff9ef',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            borderRadius: '12px',
+            padding: '12px',
+            marginBottom: '16px'
+          }}>
+            <summary style={{ fontWeight: 'bold', fontSize: '0.95rem', color: '#fff9ef', cursor: 'pointer', outline: 'none', listStyle: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span>⚙ Settings &amp; Automation</span>
+              <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>▼</span>
+            </summary>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
+              <div className="row compact" style={{ margin: 0 }}>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={settings.wdsfTimedMode}
+                    onChange={(e) => setSettings((prev) => ({ ...prev, wdsfTimedMode: e.target.checked }))}
                   />
-                </div>
+                  WDSF timed mode
+                </label>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={sessionRule.announcementEnabled}
+                    onChange={(e) => setSessionRule((prev) => ({ ...prev, announcementEnabled: e.target.checked }))}
+                  />
+                  Announce next dance
+                </label>
               </div>
-              <span className="now-playing-break-badge">{breakInfo.totalSec}s</span>
-            </div>
-          ) : currentTrack ? (
-            <div className="now-playing-strip">
-              <div className="now-playing-info">
-                <span className="now-playing-title">{cleanDisplayTitle(currentTrack.title)}</span>
-                {currentTrack.artist && <span className="now-playing-artist">{currentTrack.artist}</span>}
-              </div>
-              <span className="dance-badge now-playing-badge" style={{ background: DANCE_COLORS[currentTrack.danceType] }}>
-                {currentTrack.danceType}
-              </span>
-            </div>
-          ) : (
-            <div className="now-playing-strip now-playing-empty">No track playing</div>
-          )}
 
-
-          {currentTrack && settings.wdsfTimedMode && (() => {
-            const dur = currentTrack.durationSec || 1
-            const cuePos = (currentTrack.cueStartSec / dur) * 100
-            const endSec = Math.min(dur, currentTrack.cueStartSec + currentTrack.targetPlaytimeSec)
-            const endPos = (endSec / dur) * 100
-            const fmtSec = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`
-            return (
-              <div className="cue-bar-wrap">
-                <div className="cue-bar">
-                  <div className="cue-bar-active" style={{ left: `${cuePos}%`, width: `${endPos - cuePos}%` }} />
-                  <div className="cue-bar-progress" style={{ width: `${trackProgress * 100}%` }} />
-                  <div className="cue-marker cue-marker-start" style={{ left: `${cuePos}%` }} title={`Cue: ${fmtSec(currentTrack.cueStartSec)}`} />
-                  <div className="cue-marker cue-marker-end" style={{ left: `${endPos}%` }} title={`End: ${fmtSec(endSec)}`} />
+              {/* Break between tracks */}
+              <div>
+                <h4 style={{ margin: '0 0 6px', fontSize: '0.9rem', borderBottom: '1px solid rgba(255, 255, 255, 0.15)', paddingBottom: '4px' }}>Break between tracks</h4>
+                <div className="row compact" style={{ margin: 0 }}>
+                  <label className="check">
+                    <input
+                      type="checkbox"
+                      checked={sessionRule.autoBreakEnabled}
+                      onChange={(e) => setSessionRule((prev) => ({ ...prev, autoBreakEnabled: e.target.checked }))}
+                    />
+                    Enable break
+                  </label>
                 </div>
-                <div className="cue-bar-labels">
-                  <span>▶ {fmtSec(currentTrack.cueStartSec)}</span>
-                  <span>⏹ {fmtSec(endSec)}</span>
-                </div>
+                {sessionRule.autoBreakEnabled && (
+                  <div className="row compact break-settings-row" style={{ marginTop: '8px', marginBottom: 0 }}>
+                    <label style={{ color: '#fff9ef' }}>
+                      Duration
+                      <select
+                        value={sessionRule.breakDurationSec}
+                        onChange={(e) => setSessionRule((prev) => ({ ...prev, breakDurationSec: Number(e.target.value) }))}
+                        style={{ background: '#1c3d4e', color: '#fff9ef', borderColor: 'rgba(255, 255, 255, 0.2)' }}
+                      >
+                        {Array.from({ length: 24 }, (_, i) => (i + 1) * 5).map((s) => (
+                          <option key={s} value={s}>{s}s</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label style={{ color: '#fff9ef' }}>
+                      Mode
+                      <select
+                        value={sessionRule.breakMode ?? 'countdown'}
+                        onChange={(e) => setSessionRule((prev) => ({ ...prev, breakMode: e.target.value as SessionRule['breakMode'] }))}
+                        style={{ background: '#1c3d4e', color: '#fff9ef', borderColor: 'rgba(255, 255, 255, 0.2)' }}
+                      >
+                        <option value="silence">Silence</option>
+                        <option value="countdown">Countdown</option>
+                        <option value="applause">Applause</option>
+                      </select>
+                    </label>
+                  </div>
+                )}
               </div>
-            )
-          })()}
 
-          {/* Playback controls */}
-          <div className="player-controls">
-            <button type="button" className="ctrl-btn" title="Play from start" onClick={playFromStart}>▶</button>
-            <button type="button" className="ctrl-btn" title="Next track" onClick={nextSong}>⏭</button>
-            <button type="button" className="ctrl-btn" title="Restart track" onClick={repeatSong}>↺</button>
-            <button type="button" className="ctrl-btn" title="−15 seconds" onClick={() => seekBy(-15)}>−15s</button>
-            <button type="button" className="ctrl-btn" title="+15 seconds" onClick={() => seekBy(15)}>+15s</button>
-          </div>
-
-          {/* Speed row */}
-          <div className="player-speed-row">
-            <button type="button" className="ctrl-btn speed-btn" onClick={() => applySpeedDelta(-10)}>−10%</button>
-            <input
-              type="range"
-              className="speed-slider"
-              min={-50}
-              max={50}
-              value={settings.speedPct}
-              onChange={(e) => setSettings((prev) => ({ ...prev, speedPct: clampSpeed(Number(e.target.value)) }))}
-            />
-            <button type="button" className="ctrl-btn speed-btn" onClick={() => applySpeedDelta(10)}>+10%</button>
-            <span className="speed-label">{settings.speedPct > 0 ? '+' : ''}{settings.speedPct}%</span>
-          </div>
-
-          <div className="row compact">
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={settings.wdsfTimedMode}
-                onChange={(e) => setSettings((prev) => ({ ...prev, wdsfTimedMode: e.target.checked }))}
-              />
-              WDSF timed mode
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={sessionRule.announcementEnabled}
-                onChange={(e) => setSessionRule((prev) => ({ ...prev, announcementEnabled: e.target.checked }))}
-              />
-              Announce next dance
-            </label>
-          </div>
-
-          {/* Break between tracks */}
-          <h3>Break between tracks</h3>
-          <div className="row compact">
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={sessionRule.autoBreakEnabled}
-                onChange={(e) => setSessionRule((prev) => ({ ...prev, autoBreakEnabled: e.target.checked }))}
-              />
-              Enable break
-            </label>
-          </div>
-          {sessionRule.autoBreakEnabled && (
-            <div className="row compact break-settings-row">
-              <label>
-                Duration
-                <select
-                  value={sessionRule.breakDurationSec}
-                  onChange={(e) => setSessionRule((prev) => ({ ...prev, breakDurationSec: Number(e.target.value) }))}
-                >
-                  {Array.from({ length: 24 }, (_, i) => (i + 1) * 5).map((s) => (
-                    <option key={s} value={s}>{s}s</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Mode
-                <select
-                  value={sessionRule.breakMode ?? 'countdown'}
-                  onChange={(e) => setSessionRule((prev) => ({ ...prev, breakMode: e.target.value as SessionRule['breakMode'] }))}
-                >
-                  <option value="silence">Silence</option>
-                  <option value="countdown">Countdown</option>
-                  <option value="applause">Applause</option>
-                </select>
-              </label>
+              {/* Voice commands */}
+              <div>
+                <h4 style={{ margin: '0 0 6px', fontSize: '0.9rem', borderBottom: '1px solid rgba(255, 255, 255, 0.15)', paddingBottom: '4px' }}>Voice commands</h4>
+                {!window.isSecureContext && (
+                  <div className="https-warning" style={{ background: '#3b2f0f', borderColor: '#e6b84a', color: '#ffd073' }}>
+                    Voice requires HTTPS.
+                  </div>
+                )}
+                <div className="row compact" style={{ margin: 0 }}>
+                  <button
+                    type="button"
+                    className={isListening ? 'live' : ''}
+                    onClick={toggleVoiceListening}
+                    style={{ background: isListening ? '#00b06b' : 'rgba(255, 255, 255, 0.1)', color: '#fff', borderColor: isListening ? '#006e41' : 'rgba(255,255,255,0.15)' }}
+                  >
+                    {isListening ? '🎙 Listening…' : '🎙 Voice Command'}
+                  </button>
+                </div>
+                <p className="hint" style={{ marginTop: '6px', color: '#a0b2bd' }}>
+                  Commands (EN+DE): slower/langsamer · faster/schneller · next song/nächstes Lied · repeat/wiederholen · play {'<dance>'}/spiele {'<dance>'}
+                </p>
+                {repeatAnnounce && <p className="hint" style={{ marginTop: '4px', color: '#a0b2bd' }}>Last announcement: {repeatAnnounce}</p>}
+              </div>
             </div>
-          )}
-
-          <h3>Voice commands</h3>
-          {!window.isSecureContext && (
-            <div className="https-warning">
-              Voice requires HTTPS. To enable on iPhone: run{' '}
-              <code>npx cloudflare tunnel --url http://localhost:5173</code> and open the provided
-              https:// address, or use <code>npm run preview -- --https</code>.
-            </div>
-          )}
-          <div className="row compact">
-            <button
-              type="button"
-              className={isListening ? 'live' : ''}
-              onClick={toggleVoiceListening}
-            >
-              {isListening ? '🎙 Listening…' : '🎙 Voice Command'}
-            </button>
-          </div>
-
-          <p className="hint">
-            Commands (EN+DE): slower/langsamer · faster/schneller · next song/nächstes Lied · repeat/wiederholen · play {'<dance>'}/spiele {'<dance>'}
-          </p>
-          {repeatAnnounce && <p className="hint">Last announcement: {repeatAnnounce}</p>}
+          </details>
 
           {/* ── Upcoming queue ── */}
           {playlist.entries.length > 0 && (
