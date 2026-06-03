@@ -1621,7 +1621,27 @@ function App() {
                 {savedPlaylists.map((sp) => (
                   <details key={sp.id} className="saved-playlist-item">
                     <summary className="saved-playlist-summary">
-                      <span className="saved-playlist-name">{sp.name}</span>
+                      <input
+                        type="text"
+                        className="saved-playlist-name"
+                        value={sp.name}
+                        onClick={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                          if (e.key === ' ' || e.key === 'Enter') {
+                            e.stopPropagation()
+                            if (e.key === 'Enter') {
+                              e.currentTarget.blur()
+                            }
+                          }
+                        }}
+                        onChange={(e) => {
+                          const nextName = e.target.value
+                          setSavedPlaylists((prev) =>
+                            prev.map((p) => (p.id === sp.id ? { ...p, name: nextName } : p))
+                          )
+                        }}
+                      />
                       <span className="saved-playlist-count">{sp.entries.length} entries</span>
                       <button
                         type="button"
@@ -2396,6 +2416,12 @@ function App() {
                     value={t.cueStartSec}
                     onChange={(e) => updateTrack(t.id, { cueStartSec: Number(e.target.value) })}
                   />
+                  <input
+                    type="range" min={0} max={t.durationSec || 300} step={1}
+                    value={t.cueStartSec}
+                    onChange={(e) => updateTrack(t.id, { cueStartSec: Number(e.target.value) })}
+                    style={{ width: '100%', marginTop: '6px' }}
+                  />
                 </label>
                 <label className="edit-modal-field half">
                   <span className="edit-modal-label">Playtime (s)</span>
@@ -2404,6 +2430,12 @@ function App() {
                     value={t.targetPlaytimeSec}
                     onChange={(e) => updateTrack(t.id, { targetPlaytimeSec: Number(e.target.value) })}
                   />
+                  <input
+                    type="range" min={10} max={t.durationSec || 300} step={1}
+                    value={t.targetPlaytimeSec}
+                    onChange={(e) => updateTrack(t.id, { targetPlaytimeSec: Number(e.target.value) })}
+                    style={{ width: '100%', marginTop: '6px' }}
+                  />
                 </label>
                 <label className="edit-modal-field half">
                   <span className="edit-modal-label">Fade (s)</span>
@@ -2411,6 +2443,12 @@ function App() {
                     type="number" min={1} max={10} className="edit-modal-input"
                     value={t.fadeOutSec}
                     onChange={(e) => updateTrack(t.id, { fadeOutSec: Number(e.target.value) })}
+                  />
+                  <input
+                    type="range" min={1} max={10} step={0.5}
+                    value={t.fadeOutSec}
+                    onChange={(e) => updateTrack(t.id, { fadeOutSec: Number(e.target.value) })}
+                    style={{ width: '100%', marginTop: '6px' }}
                   />
                 </label>
               </div>
