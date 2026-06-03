@@ -2532,49 +2532,52 @@ function App() {
                   </button>
                 </div>
               </div>
-              <button
-                type="button"
-                className="btn-danger"
-                style={{ marginTop: '8px', width: '100%', marginBottom: '4px' }}
-                onClick={() => {
-                  if (!window.confirm(`Remove "${t.title}" from Dance Playlists?`)) return
-                  const pa = previewAudioRef.current
-                  if (!pa.paused) {
-                    pa.pause()
-                    if (previewObjectUrlRef.current) {
-                      URL.revokeObjectURL(previewObjectUrlRef.current)
-                      previewObjectUrlRef.current = null
+              <div style={{ display: 'flex', gap: '8px', marginTop: '8px', width: '100%' }}>
+                <button
+                  type="button"
+                  className="btn-danger"
+                  style={{ flex: 1, padding: '10px 12px', margin: 0 }}
+                  onClick={() => {
+                    if (!window.confirm(`Remove "${t.title}" from Dance Playlists?`)) return
+                    const pa = previewAudioRef.current
+                    if (!pa.paused) {
+                      pa.pause()
+                      if (previewObjectUrlRef.current) {
+                        URL.revokeObjectURL(previewObjectUrlRef.current)
+                        previewObjectUrlRef.current = null
+                      }
+                      setPreviewingTrackId(null)
                     }
-                    setPreviewingTrackId(null)
-                  }
-                  setDancePlaylists((prev) => prev.map((p) => ({
-                    ...p,
-                    entries: p.entries.filter((en) => en.type !== 'track' || en.trackId !== t.id)
-                  })))
-                  setStatus(`Removed \u201c${t.title}\u201d from Dance Playlists.`)
-                  setEditingTrackId(null)
-                }}
-              >
-                ✕ Remove from Dance Playlist
-              </button>
-              <button
-                type="button"
-                className="edit-modal-close cta"
-                onClick={() => {
-                  const pa = previewAudioRef.current
-                  if (!pa.paused) {
-                    pa.pause()
-                    if (previewObjectUrlRef.current) {
-                      URL.revokeObjectURL(previewObjectUrlRef.current)
-                      previewObjectUrlRef.current = null
+                    setDancePlaylists((prev) => prev.map((p) => ({
+                      ...p,
+                      entries: p.entries.filter((en) => en.type !== 'track' || en.trackId !== t.id)
+                    })))
+                    setStatus(`Removed \u201c${t.title}\u201d from Dance Playlists.`)
+                    setEditingTrackId(null)
+                  }}
+                >
+                  ✕ Remove
+                </button>
+                <button
+                  type="button"
+                  className="edit-modal-close cta"
+                  style={{ flex: 1, padding: '10px 12px', margin: 0, alignSelf: 'stretch' }}
+                  onClick={() => {
+                    const pa = previewAudioRef.current
+                    if (!pa.paused) {
+                      pa.pause()
+                      if (previewObjectUrlRef.current) {
+                        URL.revokeObjectURL(previewObjectUrlRef.current)
+                        previewObjectUrlRef.current = null
+                      }
+                      setPreviewingTrackId(null)
                     }
-                    setPreviewingTrackId(null)
-                  }
-                  setEditingTrackId(null)
-                }}
-              >
-                Done
-              </button>
+                    setEditingTrackId(null)
+                  }}
+                >
+                  Done
+                </button>
+              </div>
             </div>
           </div>
         )
