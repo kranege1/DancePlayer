@@ -26,7 +26,7 @@ const DANCE_KEYWORDS: Record<DanceType, string[]> = {
   Rumba: ['rumba', 'rb', 'ru'],
   'Paso Doble': ['paso doble', 'pasodoble', 'paso-doble', 'pd', 'paso'],
   Jive: ['jive', 'jv'],
-  Waltz: ['waltz', 'walzer', 'slow waltz', 'langsamer walzer', 'lw', 'ewalz'],
+  Waltz: ['waltz', 'walzer', 'slow waltz', 'langsamer walzer', 'lw', 'ewalz', 'ewaltz'],
   Tango: ['tango', 'tg'],
   'Viennese Waltz': ['viennese waltz', 'wiener walzer', 'viennese', 'wiener', 'vw', 'ww', 'vwalz', 'vwaltz', 'ewaltz'],
   Foxtrot: ['foxtrot', 'slow fox', 'slowfox', 'sf', 'foxtrott', 'slow'],
