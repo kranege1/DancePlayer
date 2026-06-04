@@ -121,31 +121,6 @@ const DANCE_COLORS: Record<DanceType, string> = {
   'Viennese Waltz': '#00897b',
   Foxtrot: '#2e7d32',
   Quickstep: '#f57c00',
-  Bachata: '#5c6bc0',
-  Salsa: '#5c6bc0',
-  Kizomba: '#5c6bc0',
-  Zouk: '#5c6bc0',
-  Merengue: '#5c6bc0',
-  'West Coast Swing': '#5c6bc0',
-  'East Coast Swing': '#5c6bc0',
-  'Lindy Hop': '#5c6bc0',
-  Charleston: '#5c6bc0',
-  Balboa: '#5c6bc0',
-  Shag: '#5c6bc0',
-  'Argentine Tango': '#5c6bc0',
-  Milonga: '#5c6bc0',
-  Vals: '#5c6bc0',
-  Bolero: '#5c6bc0',
-  Mambo: '#5c6bc0',
-  'Forró': '#5c6bc0',
-  Lambada: '#5c6bc0',
-  Semba: '#5c6bc0',
-  Cumbia: '#5c6bc0',
-  'Country Western Two-Step': '#5c6bc0',
-  'Nightclub Two-Step': '#5c6bc0',
-  Polka: '#5c6bc0',
-  'Boogie Woogie': '#5c6bc0',
-  "Rock 'n' Roll": '#5c6bc0',
   Other: '#546e7a',
 }
 
@@ -160,31 +135,6 @@ const DANCE_ABBR: Record<DanceType, string> = {
   'Viennese Waltz': 'VW',
   Foxtrot: 'SF',
   Quickstep: 'QS',
-  Bachata: 'BAC',
-  Salsa: 'SAL',
-  Kizomba: 'KIZ',
-  Zouk: 'ZOU',
-  Merengue: 'MER',
-  'West Coast Swing': 'WCS',
-  'East Coast Swing': 'ECS',
-  'Lindy Hop': 'LIN',
-  Charleston: 'CHA',
-  Balboa: 'BAL',
-  Shag: 'SHA',
-  'Argentine Tango': 'ATG',
-  Milonga: 'MIL',
-  Vals: 'VAL',
-  Bolero: 'BOL',
-  Mambo: 'MAM',
-  'Forró': 'FOR',
-  Lambada: 'LAM',
-  Semba: 'SEM',
-  Cumbia: 'CUM',
-  'Country Western Two-Step': 'CWT',
-  'Nightclub Two-Step': 'NC2',
-  Polka: 'POL',
-  'Boogie Woogie': 'BWG',
-  "Rock 'n' Roll": 'RNR',
   Other: 'OTH',
 }
 
@@ -219,10 +169,10 @@ function extractArtistFromFilename(filenameNoExt: string): { title: string; arti
   if (dashMatch) {
     const left = dashMatch[1].trim()
     const right = dashMatch[2].trim()
-    const looksLikeDance = /\b(waltz|tango|samba|cha|rumba|paso|jive|foxtrot|quickstep|viennese|bachata|salsa|kizomba|swing|polka|boogie|merengue|mambo|bolero|cumbia|foxtrot)\b/i.test(left)
+    const looksLikeDance = /\b(waltz|tango|samba|cha|rumba|paso|jive|foxtrot|quickstep|viennese)\b/i.test(left)
     if (!looksLikeDance && left.length > 1 && right.length > 1) {
       if (!danceHint) {
-        const leftIsDance = /\b(waltz|tango|samba|cha|rumba|paso|jive|foxtrot|quickstep|viennese|bachata|salsa|kizomba|swing|polka|boogie|merengue|mambo|bolero|cumbia)\b/i.test(left)
+        const leftIsDance = /\b(waltz|tango|samba|cha|rumba|paso|jive|foxtrot|quickstep|viennese)\b/i.test(left)
         if (leftIsDance) {
           danceHint = left
           return { title: right, danceHint }

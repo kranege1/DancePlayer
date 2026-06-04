@@ -26,36 +26,11 @@ const DANCE_KEYWORDS: Record<DanceType, string[]> = {
   Rumba: ['rumba', 'rb', 'ru'],
   'Paso Doble': ['paso doble', 'pasodoble', 'paso-doble', 'pd', 'paso'],
   Jive: ['jive', 'jv'],
-  Waltz: ['waltz', 'walzer', 'slow waltz', 'langsamer walzer', 'lw', 'ewalz', 'ewaltz'],
+  Waltz: ['waltz', 'walzer', 'slow waltz', 'langsamer waltz', 'lw', 'ewalz', 'ewaltz'],
   Tango: ['tango', 'tg'],
   'Viennese Waltz': ['viennese waltz', 'wiener walzer', 'viennese', 'wiener', 'vw', 'ww', 'vwalz', 'vwaltz', 'ewaltz'],
   Foxtrot: ['foxtrot', 'slow fox', 'slowfox', 'sf', 'foxtrott', 'slow'],
   Quickstep: ['quickstep', 'quick step', 'qs'],
-  Bachata: ['bachata'],
-  Salsa: ['salsa'],
-  Kizomba: ['kizomba'],
-  Zouk: ['zouk'],
-  Merengue: ['merengue', 'meringue'],
-  'West Coast Swing': ['west coast swing', 'wcs'],
-  'East Coast Swing': ['east coast swing', 'ecs'],
-  'Lindy Hop': ['lindy hop', 'lindy'],
-  Charleston: ['charleston'],
-  Balboa: ['balboa'],
-  Shag: ['shag'],
-  'Argentine Tango': ['argentine tango', 'tango argentino'],
-  Milonga: ['milonga'],
-  Vals: ['vals'],
-  Bolero: ['bolero'],
-  Mambo: ['mambo'],
-  'Forró': ['forro', 'forró'],
-  Lambada: ['lambada'],
-  Semba: ['semba'],
-  Cumbia: ['cumbia'],
-  'Country Western Two-Step': ['country two step', 'country two-step', 'western two step'],
-  'Nightclub Two-Step': ['nightclub two step', 'nightclub two-step', 'nc2s'],
-  Polka: ['polka'],
-  'Boogie Woogie': ['boogie woogie', 'boogie-woogie'],
-  "Rock 'n' Roll": ['rock n roll', "rock 'n' roll", 'rock and roll', 'rock&roll', 'rnr'],
   Other: [],
 }
 
@@ -70,31 +45,6 @@ const DANCE_PRIORITY: DanceType[] = [
   'Samba',
   'Rumba',
   'Jive',
-  'Argentine Tango',
-  'West Coast Swing',
-  'East Coast Swing',
-  'Lindy Hop',
-  'Nightclub Two-Step',
-  'Country Western Two-Step',
-  'Boogie Woogie',
-  "Rock 'n' Roll",
-  'Bachata',
-  'Salsa',
-  'Kizomba',
-  'Zouk',
-  'Merengue',
-  'Charleston',
-  'Balboa',
-  'Shag',
-  'Milonga',
-  'Vals',
-  'Bolero',
-  'Mambo',
-  'Forró',
-  'Lambada',
-  'Semba',
-  'Cumbia',
-  'Polka',
   'Other',
 ]
 
@@ -216,33 +166,8 @@ function scoreDancesFromGenres(genres: string[]): DanceScore[] {
     const g = raw.toLowerCase().trim()
 
     // ── Exact / strong matches ──────────────────────────────────────────────
-    if (g === 'bachata') add('Bachata', 5)
-    else if (g === 'salsa' || g === 'salsa romantica' || g === 'modern salsa') add('Salsa', 5)
-    else if (g === 'kizomba') add('Kizomba', 5)
-    else if (g === 'zouk' || g === 'brazilian zouk') add('Zouk', 5)
-    else if (g === 'merengue') add('Merengue', 5)
-    else if (g === 'west coast swing') add('West Coast Swing', 5)
-    else if (g === 'east coast swing' || g === 'triple swing') add('East Coast Swing', 5)
-    else if (g === 'lindy hop') add('Lindy Hop', 5)
-    else if (g === 'charleston') add('Charleston', 5)
-    else if (g === 'balboa') add('Balboa', 5)
-    else if (g === 'carolina shag' || g === 'collegiate shag') add('Shag', 5)
-    else if (g === 'argentine tango' || g === 'tango argentino') add('Argentine Tango', 5)
-    else if (g === 'milonga') add('Milonga', 5)
-    else if (g === 'vals') add('Vals', 5)
-    else if (g === 'bolero') add('Bolero', 4)
-    else if (g === 'mambo') add('Mambo', 5)
-    else if (g === 'forró' || g === 'forro') add('Forró', 5)
-    else if (g === 'lambada') add('Lambada', 5)
-    else if (g === 'semba') add('Semba', 5)
-    else if (g === 'cumbia') add('Cumbia', 5)
-    else if (g === 'country two-step' || g === 'country two step') add('Country Western Two-Step', 5)
-    else if (g === 'nightclub two-step' || g === 'nightclub two step') add('Nightclub Two-Step', 5)
-    else if (g === 'polka') add('Polka', 5)
-    else if (g === 'boogie-woogie' || g === 'boogie woogie') add('Boogie Woogie', 5)
-    else if (g === "rock 'n' roll" || g === 'rock and roll' || g === 'rock n roll') add("Rock 'n' Roll", 5)
     // WDSF ballroom dances
-    else if (g === 'samba') add('Samba', 5)
+    if (g === 'samba') add('Samba', 5)
     else if (g === 'cha-cha' || g === 'cha cha' || g === 'cha-cha-chá') add('ChaCha', 5)
     else if (g === 'rumba') add('Rumba', 5)
     else if (g === 'paso doble' || g === 'pasodoble') add('Paso Doble', 5)
@@ -254,13 +179,8 @@ function scoreDancesFromGenres(genres: string[]): DanceScore[] {
     else if (g === 'quickstep') add('Quickstep', 5)
 
     // ── Softer / genre-family hints (lower scores) ───────────────────────────
-    else if (g === 'tango') { add('Tango', 2); add('Argentine Tango', 1.5) }
-    else if (g === 'swing music' || g === 'swing') { add('East Coast Swing', 1.5); add('Lindy Hop', 1); add('West Coast Swing', 1) }
-    else if (g === 'big band' || g === 'jazz') { add('Foxtrot', 1); add('East Coast Swing', 1) }
-    else if (g === 'latin' || g === 'latin pop' || g === 'tropical') { add('Salsa', 1); add('Bachata', 0.8); add('Merengue', 0.8) }
-    else if (g === 'latin jazz') { add('Mambo', 1.5); add('ChaCha', 1) }
+    else if (g === 'tango') add('Tango', 2)
     else if (g === 'bossa nova') { add('Samba', 1.5); add('Rumba', 1) }
-    else if (g === 'country' || g === 'country road' || g === 'country pop') { add('Country Western Two-Step', 1.5) }
     else if (g === 'walzer' || g === 'langsamer walzer') add('Waltz', 4)
     else if (g === 'wiener walzer') add('Viennese Waltz', 4)
   }
