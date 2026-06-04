@@ -34,5 +34,11 @@ export default defineConfig({
   ],
   build: {
     chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      onwarn(warning, defaultWarn) {
+        if (warning.code === 'EVAL') return
+        defaultWarn(warning)
+      },
+    },
   },
 })
