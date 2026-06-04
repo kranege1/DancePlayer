@@ -616,23 +616,6 @@ function App() {
     setPlaylist((prev) => ({ ...prev, name: nextName }))
   }
 
-  function createNewPlaylist() {
-    const nextName = window.prompt('Name the new playlist:', playlist.name || '')
-    if (!nextName?.trim()) {
-      setStatus('Playlist creation cancelled. A playlist name is required.')
-      return
-    }
-
-    setPlaylist({
-      id: createId('playlist'),
-      name: nextName.trim(),
-      entries: [],
-    })
-    setActiveEntryId(null)
-    clearSelection()
-    setStatus(`Created playlist "${nextName.trim()}".`)
-  }
-
   function removePlaylistEntry(entryId: string) {
     setPlaylist((prev) => ({ ...prev, entries: prev.entries.filter((e) => e.id !== entryId) }))
   }
@@ -1593,9 +1576,6 @@ function App() {
             />
             <button type="button" className="cta" onClick={saveCurrentPlaylist}>
               Save
-            </button>
-            <button type="button" onClick={createNewPlaylist}>
-              New
             </button>
           </div>
 
