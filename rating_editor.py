@@ -57,12 +57,6 @@ class RatingEditorApp:
             self.show_missing_dependency_screen()
             return
 
-        # Initialize Playback
-        try:
-            self.playback = Playback()
-        except Exception as e:
-            print("Warning: Could not initialize audio device:", e)
-
         self.build_ui()
 
     def show_missing_dependency_screen(self):
@@ -378,6 +372,12 @@ class RatingEditorApp:
         self.entry_album.insert(0, album)
 
         # Load file into player
+        if self.playback is None and DEPENDENCIES_AVAILABLE:
+            try:
+                self.playback = Playback()
+            except Exception as e:
+                print("Warning: Could not initialize audio device:", e)
+
         if self.playback:
             try:
                 self.playback.load_file(filepath)
