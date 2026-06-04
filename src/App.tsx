@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
+import * as mm from 'music-metadata-browser'
 import {
   DANCES,
   DANCE_CATEGORIES,
@@ -591,6 +592,17 @@ function App() {
         (item.title && item.title === finalTitle)
       )
 
+      let initialRating = 0
+      try {
+        const metadata = await mm.parseBlob(file)
+        const ratings = metadata.common.rating
+        if (ratings && ratings.length > 0) {
+          initialRating = Math.round(ratings[0].rating * 5)
+        }
+      } catch (err) {
+        console.warn('Failed to parse audio tags for rating:', err)
+      }
+
       imported.push({
         id,
         title: finalTitle,
@@ -599,7 +611,7 @@ function App() {
         danceType,
         analysisConfidence: finalConfidence,
         hasCachedAudio: true,
-        qualityRating: 0,
+        qualityRating: initialRating,
         rhythmRating: 0,
         durationSec,
         cueStartSec: 0,
