@@ -4,12 +4,15 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 # Ensure mutagen and just_playback are installed, otherwise prompt the user with instructions
+IMPORT_ERROR_MSG = ""
 try:
     from mutagen.id3 import ID3, TALB, TIT2, TPE1, POPM
     from mutagen.mp3 import MP3
     from just_playback import Playback
     DEPENDENCIES_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    import traceback
+    IMPORT_ERROR_MSG = traceback.format_exc()
     DEPENDENCIES_AVAILABLE = False
 
 
@@ -87,6 +90,14 @@ class RatingEditorApp:
         cmd_entry.insert(0, "pip install mutagen just_playback")
         cmd_entry.configure(state="readonly")
         cmd_entry.pack(pady=10)
+
+        if IMPORT_ERROR_MSG:
+            lbl_err = tk.Label(frame, text="Debug Info (Error Traceback):", fg="#ff5252", bg=self.bg_color, font=("Arial", 9, "bold"))
+            lbl_err.pack(pady=(10, 0))
+            txt_err = tk.Text(frame, height=4, width=60, font=("Courier", 8), bg="#121214", fg="#ff5252", bd=0)
+            txt_err.insert(tk.END, IMPORT_ERROR_MSG)
+            txt_err.configure(state="disabled")
+            txt_err.pack(pady=5)
 
         btn_retry = ttk.Button(frame, text="I installed them, try again!", command=self.restart_app)
         btn_retry.pack(pady=20)
