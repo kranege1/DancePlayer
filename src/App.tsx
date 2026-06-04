@@ -851,6 +851,14 @@ function App() {
     setStatus('Library metadata exported.')
   }
 
+  function downloadRatingEditor() {
+    const a = document.createElement('a')
+    a.href = '/rating_editor.py'
+    a.download = 'rating_editor.py'
+    a.click()
+    setStatus('Downloaded rating_editor.py helper tool.')
+  }
+
   function handleImportBackup(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     if (!file) return
@@ -2336,6 +2344,7 @@ function App() {
 
         {/* ── Export ── */}
         {activeTab === 'export' && (
+        <>
         <section className="panel panel-backup">
           <h2>Backup &amp; Restore</h2>
           <p className="hint">
@@ -2396,6 +2405,43 @@ function App() {
             style={{ display: 'none' }}
           />
         </section>
+
+        <section className="panel panel-backup" style={{ marginTop: '20px' }}>
+          <h2>Desktop Helper Tool</h2>
+          <p className="hint">
+            To view, edit, or adjust audio file ratings directly on your local computer, download the standalone rating editor utility.
+          </p>
+          
+          <div className="helper-tool-card" style={{ marginTop: '15px' }}>
+            <h3>Audio Rating Editor</h3>
+            <p className="hint">
+              This utility scans a directory, displays metadata tags (Artist, Album, Title), supports test playback, and allows setting stars that write directly back into the MP3's Popularimeter (POPM) tag.
+            </p>
+            <div style={{ marginTop: '15px', marginBottom: '15px' }}>
+              <button type="button" onClick={downloadRatingEditor}>
+                📥 Download rating_editor.py
+              </button>
+            </div>
+            
+            <div className="setup-instructions" style={{ marginTop: '15px', padding: '15px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
+              <h4 style={{ margin: '0 0 10px 0', fontSize: '15px', fontWeight: 'bold' }}>Quick Setup Instructions:</h4>
+              <ol className="hint" style={{ paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '13px', lineHeight: '1.5' }}>
+                <li>Install Python 3.14 (ensure Python is in your PATH).</li>
+                <li>Open your terminal and install the required dependencies:
+                  <code style={{ display: 'block', margin: '6px 0', padding: '8px', background: '#121214', borderRadius: '4px', border: '1px solid #333', color: '#00b06b', fontFamily: 'monospace' }}>
+                    pip install mutagen just_playback
+                  </code>
+                </li>
+                <li>Run the script from the directory containing your music files:
+                  <code style={{ display: 'block', margin: '6px 0', padding: '8px', background: '#121214', borderRadius: '4px', border: '1px solid #333', color: '#00b06b', fontFamily: 'monospace' }}>
+                    python rating_editor.py
+                  </code>
+                </li>
+              </ol>
+            </div>
+          </div>
+        </section>
+        </>
         )}
       </main>
 
