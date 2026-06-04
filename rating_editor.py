@@ -94,7 +94,7 @@ class RatingEditorApp:
         if IMPORT_ERROR_MSG:
             lbl_err = tk.Label(frame, text="Debug Info (Error Traceback):", fg="#ff5252", bg=self.bg_color, font=("Arial", 9, "bold"))
             lbl_err.pack(pady=(10, 0))
-            txt_err = tk.Text(frame, height=4, width=60, font=("Courier", 8), bg="#121214", fg="#ff5252", bd=0)
+            txt_err = tk.Text(frame, height=10, width=60, font=("Courier", 8), bg="#121214", fg="#ff5252", bd=0)
             txt_err.insert(tk.END, IMPORT_ERROR_MSG)
             txt_err.configure(state="disabled")
             txt_err.pack(pady=5)
