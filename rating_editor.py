@@ -501,7 +501,19 @@ class RatingEditorApp:
         self.root.destroy()
 
 
+def report_callback_exception(exc, val, tb):
+    import traceback
+    err_msg = "".join(traceback.format_exception(exc, val, tb))
+    try:
+        with open("crash_log.txt", "a") as f:
+            f.write(err_msg + "\n")
+    except Exception:
+        pass
+    messagebox.showerror("Internal Error", err_msg)
+
+
 if __name__ == "__main__":
     root = tk.Tk()
+    root.report_callback_exception = report_callback_exception
     app = RatingEditorApp(root)
     root.mainloop()
