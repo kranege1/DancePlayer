@@ -1422,7 +1422,7 @@ function App() {
         <section className="panel">
           <h2>Library</h2>
           <label className="file-label" htmlFor="music-files">Import music</label>
-          <input id="music-files" type="file" multiple onChange={handleImport} {...{ webkitdirectory: '', mozdirectory: '' } as React.InputHTMLAttributes<HTMLInputElement>} />
+          <input id="music-files" type="file" multiple onChange={handleImport} style={{ display: 'none' }} {...{ webkitdirectory: '', mozdirectory: '' } as React.InputHTMLAttributes<HTMLInputElement>} />
 
           {importProgress && (
             <div className="import-progress">
@@ -2248,6 +2248,7 @@ function App() {
             type="file"
             accept=".json,application/json"
             onChange={handleImportBackup}
+            style={{ display: 'none' }}
           />
         </section>
         )}
