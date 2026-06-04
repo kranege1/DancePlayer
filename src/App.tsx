@@ -1612,7 +1612,14 @@ function App() {
                   onClick={(e) => e.stopPropagation()}
                 />
                 <div className="track-info">
-                  <span className="track-title">{track.title}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    <span className="track-title">{track.title}</span>
+                    {track.qualityRating > 0 && (
+                      <span className="track-stars" style={{ color: 'var(--sun)', fontSize: '0.95rem', userSelect: 'none', letterSpacing: '0.5px' }}>
+                        {'★'.repeat(track.qualityRating) + '☆'.repeat(5 - track.qualityRating)}
+                      </span>
+                    )}
+                  </div>
                   <span className="track-meta">
                     <select
                       value={track.danceType}
