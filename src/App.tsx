@@ -55,6 +55,31 @@ declare global {
 }
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
+const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
+
+interface RemovedTrackRecord {
+  hash?: string
+  filename?: string
+  title?: string
+}
+
+function markTrackAsRemoved(hash?: string, filename?: string, title?: string) {
+  try {
+    const raw = localStorage.getItem(REMOVED_TRACKS_KEY)
+    const list: RemovedTrackRecord[] = raw ? JSON.parse(raw) : []
+    const alreadyExists = list.some(item => 
+      (hash && item.hash === hash) ||
+      (filename && item.filename === filename) ||
+      (title && item.title === title)
+    )
+    if (!alreadyExists) {
+      list.push({ hash, filename, title })
+      localStorage.setItem(REMOVED_TRACKS_KEY, JSON.stringify(list))
+    }
+  } catch (err) {
+    console.error('Failed to mark track as removed in localStorage:', err)
+  }
+}
 
 interface PersistedState {
   tracks: Track[]
@@ -384,9 +409,28 @@ function App() {
 
   function deleteSelectedTracks() {
     if (!selectedTrackIds.size) return
-    if (!window.confirm(`Delete ${selectedTrackIds.size} selected track(s) permanently?`)) return
+
+    // Stop preview if the previewing track is being deleted
+    if (previewingTrackId && selectedTrackIds.has(previewingTrackId)) {
+      const pa = previewAudioRef.current
+      if (!pa.paused) {
+        pa.pause()
+        if (previewObjectUrlRef.current) {
+          URL.revokeObjectURL(previewObjectUrlRef.current)
+          previewObjectUrlRef.current = null
+        }
+        setPreviewingTrackId(null)
+      }
+    }
 
     const idsToDelete = Array.from(selectedTrackIds)
+    // Record deleted tracks in history
+    tracks.forEach((t) => {
+      if (selectedTrackIds.has(t.id)) {
+        markTrackAsRemoved(t.hash, t.filename, t.title)
+      }
+    })
+
     setTracks((prev) => prev.filter((t) => !selectedTrackIds.has(t.id)))
     idsToDelete.forEach((id) => {
       void removeAudioFile(id)
@@ -468,6 +512,14 @@ function App() {
     const imported: Track[] = []
     const importedMap: Record<string, File | undefined> = {}
 
+    let removedList: RemovedTrackRecord[] = []
+    try {
+      const raw = localStorage.getItem(REMOVED_TRACKS_KEY)
+      if (raw) removedList = JSON.parse(raw)
+    } catch (e) {
+      console.error(e)
+    }
+
     for (let i = 0; i < filesToImport.length; i++) {
       const file = filesToImport[i]
       setImportProgress({ done: i + 1, total: filesToImport.length })
@@ -532,6 +584,12 @@ function App() {
       }
 
       const danceType = finalDanceType
+      const fileHash = filesToImportHashes[i]
+      const wasRemovedEarlier = removedList.some(item => 
+        (fileHash && item.hash === fileHash) ||
+        (item.filename && item.filename === file.name) ||
+        (item.title && item.title === finalTitle)
+      )
 
       imported.push({
         id,
@@ -547,7 +605,8 @@ function App() {
         cueStartSec: 0,
         targetPlaytimeSec: WDSF_2025_DEFAULT_PLAYTIMES[danceType],
         fadeOutSec: 3,
-        hash: filesToImportHashes[i],
+        hash: fileHash,
+        removedEarlier: wasRemovedEarlier,
       })
       importedMap[id] = file
 
@@ -864,41 +923,7 @@ function App() {
     }, dur * 1000)
   }
 
-  async function previewTrack(trackId: string) {
-    const track = tracksById[trackId]
-    const audio = audioRef.current
 
-    if (!track || !audio) {
-      setStatus('Preview unavailable for this track.')
-      return
-    }
-
-    const file = fileMap[trackId] ?? await getAudioFile(trackId)
-    if (!file) {
-      setStatus('Audio file not cached — re-import the track to preview it.')
-      return
-    }
-
-    clearPlaybackTimers()
-
-    if (activeObjectUrlRef.current) {
-      URL.revokeObjectURL(activeObjectUrlRef.current)
-    }
-
-    const objectUrl = URL.createObjectURL(file)
-    activeObjectUrlRef.current = objectUrl
-    audio.src = objectUrl
-    audio.volume = 1
-    audio.playbackRate = 1 + settings.speedPct / 100
-    audio.onloadedmetadata = () => {
-      audio.currentTime = Math.max(0, track.cueStartSec)
-    }
-    audio.onended = () => {
-      setStatus(`Preview finished: ${track.title}`)
-    }
-    void audio.play()
-    setStatus(`Previewing ${track.title}. Adjust the dance in the list if needed.`)
-  }
 
   /** Ensure a shared AudioContext exists and is resumed (must be called inside a user gesture). */
   function ensureAudioCtx() {
@@ -1440,64 +1465,100 @@ function App() {
 
           {/* Filter + bulk-add toolbar */}
           {tracks.length > 0 && (
-            <div className="lib-toolbar">
-              {tracks.length > 0 && (
-                <button
-                  type="button"
-                  title="Strip dance codes and track numbers from all stored titles"
-                  onClick={() => {
-                    let count = 0
-                    setTracks((prev) => prev.map((tr) => {
-                      const cleaned = cleanStoredTitle(tr.title)
-                      // Also clear artist if it's just a bare number (e.g. "08")
-                      const artistCleaned = tr.artist && /^\d{1,3}$/.test(tr.artist.trim()) ? undefined : tr.artist
-                      if (cleaned !== tr.title || artistCleaned !== tr.artist) { count++ }
-                      return { ...tr, title: cleaned, artist: artistCleaned }
-                    }))
-                    setStatus(`Cleaned ${count} track title${count !== 1 ? 's' : ''}.`)
-                  }}
-                >
-                  ✦ Clean Titles
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '10px 0 6px' }}>
+              <div className="lib-toolbar" style={{ margin: 0 }}>
+                <button type="button" onClick={selectAllFiltered}>
+                  Select all ({visibleTracks.length})
                 </button>
-              )}
-              {tracks.length > 0 && (
-                <button
-                  type="button"
-                  title="Reset all track ratings to zero stars"
-                  onClick={() => {
-                    if (!window.confirm('Reset ratings for ALL songs to zero stars?')) return
-                    setTracks((prev) => prev.map((t) => ({ ...t, qualityRating: 0, rhythmRating: 0 })))
-                    setStatus('All track ratings reset to zero stars.')
-                  }}
-                >
-                  ☆ Reset Ratings
+                <button type="button" onClick={selectHighConfidence}>
+                  High confidence ({visibleTracks.filter((t) => !isLowConfidenceTrack(t)).length})
                 </button>
-              )}
-              <button type="button" onClick={selectAllFiltered}>
-                Select all ({visibleTracks.length})
-              </button>
-              <button type="button" onClick={selectHighConfidence}>
-                High confidence ({visibleTracks.filter((t) => !isLowConfidenceTrack(t)).length})
-              </button>
+                {selectedTrackIds.size > 0 && (
+                  <>
+                    <button type="button" className="cta" onClick={addSelectedToPlaylist}>
+                      Add {selectedTrackIds.size} to playlist
+                    </button>
+                    <button type="button" onClick={clearSelection}>
+                      Clear
+                    </button>
+                  </>
+                )}
+                {!importProgress && (
+                  <button type="button" className="cta distribute-btn" onClick={distributeToDancePlaylists}>
+                    {selectedTrackIds.size > 0
+                      ? `Distribute ${selectedTrackIds.size} selected`
+                      : 'Distribute all to dance playlists'}
+                  </button>
+                )}
+              </div>
+
               {selectedTrackIds.size > 0 && (
-                <>
-                  <button type="button" className="cta" onClick={addSelectedToPlaylist}>
-                    Add {selectedTrackIds.size} to playlist
-                  </button>
-                  <button type="button" className="btn-danger" onClick={deleteSelectedTracks}>
-                    🗑 Delete
-                  </button>
-                  <button type="button" onClick={clearSelection}>
-                    Clear
-                  </button>
-                </>
-              )}
-              {!importProgress && (
-                <button type="button" className="cta distribute-btn" onClick={distributeToDancePlaylists}>
-                  {selectedTrackIds.size > 0
-                    ? `Distribute ${selectedTrackIds.size} selected`
-                    : 'Distribute all to dance playlists'}
-                </button>
+                <div className="selected-actions-toolbar" style={{ padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  <h4 style={{ margin: '0 0 8px 0', fontSize: '0.85rem', color: '#a0b2bd', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Selected ({selectedTrackIds.size}) Actions
+                  </h4>
+                  <div className="row compact" style={{ margin: 0, gap: '8px' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        let count = 0
+                        setTracks((prev) => prev.map((tr) => {
+                          if (selectedTrackIds.has(tr.id)) {
+                            const cleaned = cleanStoredTitle(tr.title)
+                            const artistCleaned = tr.artist && /^\d{1,3}$/.test(tr.artist.trim()) ? undefined : tr.artist
+                            if (cleaned !== tr.title || artistCleaned !== tr.artist) { count++ }
+                            return { ...tr, title: cleaned, artist: artistCleaned }
+                          }
+                          return tr
+                        }))
+                        setStatus(`Cleaned titles of ${count} selected track(s).`)
+                      }}
+                    >
+                      ✦ Clean Titles
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!window.confirm(`Reset ratings of ${selectedTrackIds.size} selected song(s) to zero stars?`)) return
+                        setTracks((prev) => prev.map((t) => {
+                          if (selectedTrackIds.has(t.id)) {
+                            return { ...t, qualityRating: 0, rhythmRating: 0 }
+                          }
+                          return t
+                        }))
+                        setStatus(`Reset ratings of ${selectedTrackIds.size} selected track(s).`)
+                      }}
+                    >
+                      ☆ Reset Ratings
+                    </button>
+                    <button type="button" className="btn-danger" onClick={deleteSelectedTracks}>
+                      🗑 Delete
+                    </button>
+                    <select
+                      value=""
+                      onChange={(e) => {
+                        const targetDance = e.target.value as DanceType
+                        if (!targetDance) return
+                        setTracks((prev) =>
+                          prev.map((t) =>
+                            selectedTrackIds.has(t.id)
+                              ? { ...t, danceType: targetDance, targetPlaytimeSec: WDSF_2025_DEFAULT_PLAYTIMES[targetDance] }
+                              : t
+                          )
+                        )
+                        setStatus(`Moved ${selectedTrackIds.size} selected track(s) to ${targetDance}.`)
+                      }}
+                      style={{ background: '#1c3d4e', color: '#fff9ef', borderColor: 'rgba(255, 255, 255, 0.2)' }}
+                    >
+                      <option value="" disabled>Move to Dance...</option>
+                      {DANCES.map((d) => (
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -1539,27 +1600,99 @@ function App() {
                         </option>
                       ))}
                     </select>
-                    {track.analysisConfidence !== undefined && (
-                      <span className={`badge ${track.analysisConfidence >= 0.7 ? 'badge-ok' : 'badge-warn'}`}>
-                        {getConfidenceLabel(track.analysisConfidence)} {Math.round(track.analysisConfidence * 100)}%
+                    {track.removedEarlier ? (
+                      <span className="badge badge-warn" style={{ background: '#b71c1c', color: '#fff' }}>
+                        Removed earlier
                       </span>
+                    ) : (
+                      <>
+                        {track.analysisConfidence !== undefined && (
+                          <span className={`badge ${track.analysisConfidence >= 0.7 ? 'badge-ok' : 'badge-warn'}`}>
+                            {getConfidenceLabel(track.analysisConfidence)} {Math.round(track.analysisConfidence * 100)}%
+                          </span>
+                        )}
+                        {isLowConfidenceTrack(track) && <span className="badge badge-review">Review</span>}
+                      </>
                     )}
-                    {isLowConfidenceTrack(track) && <span className="badge badge-review">Review</span>}
+                    <button
+                      type="button"
+                      className={previewingTrackId === track.id ? 'live' : ''}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void togglePreview(track.id)
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: '34px',
+                        height: '34px',
+                        minWidth: '34px',
+                        padding: 0,
+                        borderRadius: '50%',
+                        cursor: 'pointer',
+                        lineHeight: 1,
+                        marginRight: '4px',
+                      }}
+                    >
+                      {previewingTrackId === track.id ? '⏸' : '▶'}
+                    </button>
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation()
-                        void previewTrack(track.id)
+                        const pa = previewAudioRef.current
+                        if (previewingTrackId === track.id && !pa.paused) {
+                          pa.pause()
+                          if (previewObjectUrlRef.current) {
+                            URL.revokeObjectURL(previewObjectUrlRef.current)
+                            previewObjectUrlRef.current = null
+                          }
+                          setPreviewingTrackId(null)
+                        }
+                        markTrackAsRemoved(track.hash, track.filename, track.title)
+                        void removeAudioFile(track.id)
+                        setTracks((prev) => prev.filter((x) => x.id !== track.id))
+                        setFileMap((prev) => {
+                          const next = { ...prev }
+                          delete next[track.id]
+                          return next
+                        })
+                        setPlaylist((prev) => ({
+                          ...prev,
+                          entries: prev.entries.filter((en) => en.type !== 'track' || en.trackId !== track.id)
+                        }))
+                        setDancePlaylists((prev) => prev.map((p) => ({
+                          ...p,
+                          entries: p.entries.filter((en) => en.type !== 'track' || en.trackId !== track.id)
+                        })))
+                        setSavedPlaylists((prev) => prev.map((p) => ({
+                          ...p,
+                          entries: p.entries.filter((en) => en.type !== 'track' || en.trackId !== track.id)
+                        })))
+                        setStatus(`Deleted "${track.title}" permanently.`)
                       }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: '34px',
+                        height: '34px',
+                        minWidth: '34px',
+                        padding: 0,
+                        borderRadius: '50%',
+                        cursor: 'pointer',
+                        lineHeight: 1,
+                      }}
+                      title="Delete track"
                     >
-                      Listen
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff5252" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                      </svg>
                     </button>
                   </span>
                 </div>
-                {/* Edit button → opens modal */}
-                <details className="track-details" onClick={(e) => e.stopPropagation()}>
-                  <summary onClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditingTrackId(track.id) }}>Edit</summary>
-                </details>
               </div>
             ))}
           </div>
@@ -2731,7 +2864,7 @@ function App() {
                   className="btn-danger"
                   style={{ flex: 1, padding: '10px 12px', margin: 0 }}
                   onClick={() => {
-                    if (!window.confirm(`Remove "${t.title}" from Dance Playlists?`)) return
+                    if (!window.confirm(`Delete "${t.title}" permanently?`)) return
                     const pa = previewAudioRef.current
                     if (!pa.paused) {
                       pa.pause()
@@ -2741,11 +2874,29 @@ function App() {
                       }
                       setPreviewingTrackId(null)
                     }
+                    // Record in history
+                    markTrackAsRemoved(t.hash, t.filename, t.title)
+                    // Permanently delete
+                    void removeAudioFile(t.id)
+                    setTracks((prev) => prev.filter((x) => x.id !== t.id))
+                    setFileMap((prev) => {
+                      const next = { ...prev }
+                      delete next[t.id]
+                      return next
+                    })
+                    setPlaylist((prev) => ({
+                      ...prev,
+                      entries: prev.entries.filter((en) => en.type !== 'track' || en.trackId !== t.id)
+                    }))
                     setDancePlaylists((prev) => prev.map((p) => ({
                       ...p,
                       entries: p.entries.filter((en) => en.type !== 'track' || en.trackId !== t.id)
                     })))
-                    setStatus(`Removed \u201c${t.title}\u201d from Dance Playlists.`)
+                    setSavedPlaylists((prev) => prev.map((p) => ({
+                      ...p,
+                      entries: p.entries.filter((en) => en.type !== 'track' || en.trackId !== t.id)
+                    })))
+                    setStatus(`Deleted "${t.title}" permanently.`)
                     setEditingTrackId(null)
                   }}
                 >

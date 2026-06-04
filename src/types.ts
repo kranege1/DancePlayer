@@ -39,6 +39,7 @@ export interface Track {
   targetPlaytimeSec: number
   fadeOutSec: number
   hash?: string
+  removedEarlier?: boolean
 }
 
 export interface BreakItem {
