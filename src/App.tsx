@@ -859,6 +859,14 @@ function App() {
     setStatus('Downloaded rating_editor.py helper tool.')
   }
 
+  function downloadRatingEditorExe() {
+    const a = document.createElement('a')
+    a.href = '/DancePlayer-RatingEditor.exe'
+    a.download = 'DancePlayer-RatingEditor.exe'
+    a.click()
+    setStatus('Downloaded DancePlayer-RatingEditor.exe helper executable.')
+  }
+
   function handleImportBackup(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     if (!file) return
@@ -2417,27 +2425,38 @@ function App() {
             <p className="hint">
               This utility scans a directory, displays metadata tags (Artist, Album, Title), supports test playback, and allows setting stars that write directly back into the MP3's Popularimeter (POPM) tag.
             </p>
-            <div style={{ marginTop: '15px', marginBottom: '15px' }}>
+            
+            <div style={{ marginTop: '15px', marginBottom: '15px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button type="button" onClick={downloadRatingEditorExe} style={{ background: '#00b06b', color: '#ffffff' }}>
+                🚀 Download for Windows (.exe)
+              </button>
               <button type="button" onClick={downloadRatingEditor}>
-                📥 Download rating_editor.py
+                🐍 Download Python Script (.py)
               </button>
             </div>
             
             <div className="setup-instructions" style={{ marginTop: '15px', padding: '15px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
               <h4 style={{ margin: '0 0 10px 0', fontSize: '15px', fontWeight: 'bold' }}>Quick Setup Instructions:</h4>
-              <ol className="hint" style={{ paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '13px', lineHeight: '1.5' }}>
-                <li>Install Python 3.14 (ensure Python is in your PATH).</li>
-                <li>Open your terminal and install the required dependencies:
-                  <code style={{ display: 'block', margin: '6px 0', padding: '8px', background: '#121214', borderRadius: '4px', border: '1px solid #333', color: '#00b06b', fontFamily: 'monospace' }}>
-                    pip install mutagen just_playback
-                  </code>
+              <ul className="hint" style={{ paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '13px', lineHeight: '1.5', listStyleType: 'disc' }}>
+                <li>
+                  <strong>Windows users:</strong> Simply download the <code>.exe</code> above and run it directly. No Python or libraries required!
                 </li>
-                <li>Run the script from the directory containing your music files:
-                  <code style={{ display: 'block', margin: '6px 0', padding: '8px', background: '#121214', borderRadius: '4px', border: '1px solid #333', color: '#00b06b', fontFamily: 'monospace' }}>
-                    python rating_editor.py
-                  </code>
+                <li>
+                  <strong>Mac / Linux users:</strong> Download the <code>.py</code> script, ensure Python is installed, then:
+                  <ol style={{ paddingLeft: '20px', marginTop: '5px', display: 'flex', flexDirection: 'column', gap: '4px', listStyleType: 'decimal' }}>
+                    <li>Open terminal and install dependencies:
+                      <code style={{ display: 'block', margin: '4px 0', padding: '6px', background: '#121214', borderRadius: '4px', border: '1px solid #333', color: '#00b06b', fontFamily: 'monospace' }}>
+                        pip install mutagen just_playback
+                      </code>
+                    </li>
+                    <li>Run the script:
+                      <code style={{ display: 'block', margin: '4px 0', padding: '6px', background: '#121214', borderRadius: '4px', border: '1px solid #333', color: '#00b06b', fontFamily: 'monospace' }}>
+                        python rating_editor.py
+                      </code>
+                    </li>
+                  </ol>
                 </li>
-              </ol>
+              </ul>
             </div>
           </div>
         </section>
