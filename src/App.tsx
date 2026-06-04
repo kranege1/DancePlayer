@@ -263,6 +263,9 @@ function App() {
   // Tracks whether the user *intends* listening to stay on — used for safe auto-restart on iOS
   const intendedListeningRef = useRef(false)
   const sessionRuleRef = useRef<SessionRule>(initialSessionRule)
+  sessionRuleRef.current = sessionRule
+  const settingsRef = useRef<AppSettings>(settings)
+  settingsRef.current = settings
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const previewAudioRef = useRef<HTMLAudioElement>(new Audio())
   const previewObjectUrlRef = useRef<string | null>(null)
@@ -1102,7 +1105,7 @@ function App() {
       return
     }
 
-    if (sessionRule.announcementEnabled) {
+    if (sessionRuleRef.current.announcementEnabled) {
       const phrase = `Next ${track.danceType}`   // always English
       setRepeatAnnounce(phrase)
       await speak(phrase) // wait for announcement to finish before starting playback
@@ -1119,7 +1122,7 @@ function App() {
     activeObjectUrlRef.current = objectUrl
     audio.src = objectUrl
     audio.volume = 1
-    audio.playbackRate = 1 + settings.speedPct / 100
+    audio.playbackRate = 1 + settingsRef.current.speedPct / 100
 
     audio.onloadedmetadata = () => {
       const startSec = Math.max(0, track.cueStartSec)
@@ -1134,7 +1137,7 @@ function App() {
       }
       trackProgressRef.current = requestAnimationFrame(progressTick)
 
-      if (settings.wdsfTimedMode) {
+      if (settingsRef.current.wdsfTimedMode) {
         const fadeWindow = getFadeWindow(startSec, track.targetPlaytimeSec, 5) // always 5 s fade in timed mode
 
         const tick = () => {
