@@ -3,21 +3,30 @@ import sys
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-# Ensure mutagen is installed, otherwise prompt the user with instructions
+# Ensure mutagen and just_playback are installed, otherwise prompt the user with instructions
 try:
     from mutagen.id3 import ID3, TALB, TIT2, TPE1, POPM
     from mutagen.mp3 import MP3
-    MUTAGEN_AVAILABLE = True
+    from just_playback import Playback
+    DEPENDENCIES_AVAILABLE = True
 except ImportError:
-    MUTAGEN_AVAILABLE = False
+    DEPENDENCIES_AVAILABLE = False
+
+
+def format_time(seconds):
+    if seconds is None:
+        return "00:00"
+    mins = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{mins:02d}:{secs:02d}"
 
 
 class RatingEditorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("DancePlayer Audio Rating Editor")
-        self.root.geometry("800x550")
-        self.root.minsize(700, 450)
+        self.root.geometry("800x600")
+        self.root.minsize(700, 500)
 
         # Style configurations
         self.style = ttk.Style()
@@ -38,11 +47,21 @@ class RatingEditorApp:
         self.mp3_files = []
         self.selected_file_path = None
         self.selected_rating = 0  # 0 to 5
+        self.playback = None
 
-        # If mutagen is not available, show a prominent warning screen
-        if not MUTAGEN_AVAILABLE:
+        # Bind window close event to clean up audio thread
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # If dependencies are missing, show warning screen
+        if not DEPENDENCIES_AVAILABLE:
             self.show_missing_dependency_screen()
             return
+
+        # Initialize Playback
+        try:
+            self.playback = Playback()
+        except Exception as e:
+            print("Warning: Could not initialize audio device:", e)
 
         self.build_ui()
 
@@ -52,7 +71,7 @@ class RatingEditorApp:
 
         label_title = tk.Label(
             frame, 
-            text="Dependency Missing: mutagen", 
+            text="Dependencies Missing", 
             fg="#e53935", 
             bg=self.bg_color, 
             font=("Arial", 16, "bold")
@@ -61,20 +80,20 @@ class RatingEditorApp:
 
         label_desc = tk.Label(
             frame, 
-            text="This helper app requires the 'mutagen' library to read and write audio file tags.\n\n"
-                 "Please run the following command in your terminal/cmd to install it:", 
+            text="This helper app requires the 'mutagen' and 'just_playback' libraries.\n\n"
+                 "Please run the following command in your terminal/cmd to install them:", 
             fg=self.fg_color, 
             bg=self.bg_color, 
             font=("Arial", 11)
         )
         label_desc.pack(pady=10)
 
-        cmd_entry = tk.Entry(frame, font=("Courier", 12), width=30, justify="center")
-        cmd_entry.insert(0, "pip install mutagen")
+        cmd_entry = tk.Entry(frame, font=("Courier", 12), width=35, justify="center")
+        cmd_entry.insert(0, "pip install mutagen just_playback")
         cmd_entry.configure(state="readonly")
         cmd_entry.pack(pady=10)
 
-        btn_retry = ttk.Button(frame, text="I installed it, try again!", command=self.restart_app)
+        btn_retry = ttk.Button(frame, text="I installed them, try again!", command=self.restart_app)
         btn_retry.pack(pady=20)
 
     def restart_app(self):
@@ -179,14 +198,14 @@ class RatingEditorApp:
         lbl_album = tk.Label(self.editor_container, text="ALBUM", fg="#8a9aa3", bg="#252529", font=("Arial", 8, "bold"), anchor="w")
         lbl_album.pack(fill="x", pady=(5, 2))
         self.entry_album = tk.Entry(self.editor_container, bg=self.bg_color, fg=self.fg_color, insertbackground=self.fg_color, bd=1, relief="solid", font=("Arial", 10))
-        self.entry_album.pack(fill="x", ipady=4, pady=(0, 15))
+        self.entry_album.pack(fill="x", ipady=4, pady=(0, 10))
 
         # Rating Stars Field
         lbl_rating = tk.Label(self.editor_container, text="RATING", fg="#8a9aa3", bg="#252529", font=("Arial", 8, "bold"), anchor="w")
         lbl_rating.pack(fill="x", pady=(5, 2))
         
         self.stars_frame = tk.Frame(self.editor_container, bg="#252529")
-        self.stars_frame.pack(fill="x", pady=(0, 20))
+        self.stars_frame.pack(fill="x", pady=(0, 15))
         self.star_labels = []
         for star_idx in range(1, 6):
             lbl_star = tk.Label(
@@ -194,7 +213,7 @@ class RatingEditorApp:
                 text="☆",
                 fg=self.star_color,
                 bg="#252529",
-                font=("Arial", 22, "bold"),
+                font=("Arial", 20, "bold"),
                 cursor="hand2"
             )
             lbl_star.pack(side="left", padx=4)
@@ -217,7 +236,57 @@ class RatingEditorApp:
         )
         self.btn_clear_rating.pack(side="left", padx=15)
 
-        # Action Buttons row
+        # Separator for Playback Section
+        sep = ttk.Separator(self.editor_container, orient="horizontal")
+        sep.pack(fill="x", pady=10)
+
+        # Playback Section
+        lbl_playback = tk.Label(self.editor_container, text="TEST PLAYBACK", fg="#8a9aa3", bg="#252529", font=("Arial", 8, "bold"), anchor="w")
+        lbl_playback.pack(fill="x", pady=(0, 5))
+
+        self.playback_frame = tk.Frame(self.editor_container, bg="#252529")
+        self.playback_frame.pack(fill="x", pady=(0, 15))
+
+        self.btn_play = tk.Button(
+            self.playback_frame,
+            text="▶ Play",
+            bg=self.btn_bg,
+            fg=self.fg_color,
+            activebackground=self.btn_active,
+            activeforeground=self.fg_color,
+            bd=0,
+            padx=12,
+            pady=6,
+            font=("Arial", 9, "bold"),
+            command=self.toggle_play
+        )
+        self.btn_play.pack(side="left", padx=(0, 10))
+
+        self.btn_seek = tk.Button(
+            self.playback_frame,
+            text="⏩ +15s",
+            bg=self.btn_bg,
+            fg=self.fg_color,
+            activebackground=self.btn_active,
+            activeforeground=self.fg_color,
+            bd=0,
+            padx=12,
+            pady=6,
+            font=("Arial", 9, "bold"),
+            command=self.seek_forward_15
+        )
+        self.btn_seek.pack(side="left", padx=(0, 15))
+
+        self.lbl_time = tk.Label(
+            self.playback_frame,
+            text="00:00 / 00:00",
+            fg=self.fg_color,
+            bg="#252529",
+            font=("Arial", 10)
+        )
+        self.lbl_time.pack(side="left")
+
+        # Action Buttons row (Save Changes)
         btn_actions_frame = tk.Frame(self.editor_container, bg="#252529")
         btn_actions_frame.pack(fill="x", pady=(10, 0))
 
@@ -234,11 +303,14 @@ class RatingEditorApp:
             font=("Arial", 10, "bold"),
             command=self.save_metadata
         )
-        self.btn_save.pack(side="left", padx=10)
+        self.btn_save.pack(side="left")
 
         # Add both frames to pane
         main_pane.add(left_frame, minsize=200, stretch="always")
         main_pane.add(self.right_frame, minsize=350, stretch="always")
+
+        # Start periodic label updater loop
+        self.update_playback_loop()
 
     def select_directory(self):
         folder = filedialog.askdirectory(title="Choose Audio Folder")
@@ -262,6 +334,7 @@ class RatingEditorApp:
             self.files_listbox.insert(tk.END, rel_path)
 
         self.selected_file_path = None
+        self.stop_playback()
         self.editor_container.pack_forget()
         self.placeholder_label.pack(expand=True)
 
@@ -276,6 +349,7 @@ class RatingEditorApp:
         self.placeholder_label.pack_forget()
         self.editor_container.pack(fill="both", expand=True)
 
+        self.stop_playback()
         self.load_metadata(self.selected_file_path)
 
     def load_metadata(self, filepath):
@@ -303,6 +377,14 @@ class RatingEditorApp:
         self.entry_album.delete(0, tk.END)
         self.entry_album.insert(0, album)
 
+        # Load file into player
+        if self.playback:
+            try:
+                self.playback.load_file(filepath)
+                self.btn_play.config(text="▶ Play", bg=self.btn_bg)
+            except Exception as e:
+                print("Error loading file in playback:", e)
+
         # Parse Rating (POPM Frame)
         rating_val = 0
         popm_frames = tags.getall("POPM")
@@ -321,6 +403,7 @@ class RatingEditorApp:
                 rating_val = 5
         
         self.set_rating_stars(rating_val)
+        self.update_time_label()
 
     def set_rating_stars(self, count):
         self.selected_rating = count
@@ -332,6 +415,52 @@ class RatingEditorApp:
 
     def clear_rating(self):
         self.set_rating_stars(0)
+
+    def toggle_play(self):
+        if not self.playback or not self.playback.active:
+            return
+        
+        if self.playback.playing:
+            self.playback.pause()
+            self.btn_play.config(text="▶ Play", bg=self.btn_bg)
+        else:
+            if self.playback.curr_pos >= self.playback.duration - 0.5:
+                # Seek to start if near the end
+                self.playback.seek(0)
+            self.playback.play()
+            self.btn_play.config(text="⏸ Pause", bg=self.accent_color)
+
+    def seek_forward_15(self):
+        if not self.playback or not self.playback.active:
+            return
+        new_pos = min(self.playback.duration, self.playback.curr_pos + 15.0)
+        self.playback.seek(new_pos)
+        self.update_time_label()
+
+    def stop_playback(self):
+        if self.playback and self.playback.active:
+            try:
+                self.playback.stop()
+            except Exception:
+                pass
+            self.btn_play.config(text="▶ Play", bg=self.btn_bg)
+            self.update_time_label()
+
+    def update_time_label(self):
+        if not self.playback or not self.playback.active:
+            self.lbl_time.config(text="00:00 / 00:00")
+            return
+        curr = self.playback.curr_pos
+        dur = self.playback.duration
+        self.lbl_time.config(text=f"{format_time(curr)} / {format_time(dur)}")
+
+    def update_playback_loop(self):
+        if self.playback and self.playback.active and self.playback.playing:
+            self.update_time_label()
+            # If song ended naturally, update the button state
+            if self.playback.curr_pos >= self.playback.duration - 0.1:
+                self.stop_playback()
+        self.root.after(200, self.update_playback_loop)
 
     def save_metadata(self):
         if not self.selected_file_path:
@@ -349,13 +478,12 @@ class RatingEditorApp:
             tags["TALB"] = TALB(encoding=3, text=[self.entry_album.get().strip()])
 
             # Save POPM Rating (Popularimeter) mapped to Windows/macOS values
-            # POPM expects email key and rating byte
             email_key = "Windows Media Player 9 Series"
             if self.selected_rating == 0:
                 tags.delall("POPM")
             else:
                 rating_bytes = {
-                    1: 1,      # mapped POPM rating values
+                    1: 1,
                     2: 64,
                     3: 128,
                     4: 196,
@@ -367,6 +495,10 @@ class RatingEditorApp:
             messagebox.showinfo("Success", "Metadata saved successfully!")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save metadata: {e}")
+
+    def on_close(self):
+        self.stop_playback()
+        self.root.destroy()
 
 
 if __name__ == "__main__":
