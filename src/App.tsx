@@ -485,8 +485,84 @@ function App() {
     })
 
     const skippedCount = accepted.length - newFiles.length
+
+    // Update ratings for existing duplicate files if they have POPM rating tags in file
+    const duplicateFiles = fileHashes.filter(({ file, hash }) => {
+      return tracks.some((t) => {
+        if (hash && t.hash) {
+          return t.hash === hash
+        }
+        const nameNoExt = file.name.replace(/\.[^.]+$/, '').trim().toLowerCase()
+        return t.title.trim().toLowerCase() === nameNoExt
+      })
+    })
+
+    if (duplicateFiles.length > 0) {
+      // Parse duplicate files asynchronously to check if ratings need updating
+      void Promise.all(duplicateFiles.map(async ({ file, hash }) => {
+        try {
+          const metadata = await mm.parseBlob(file)
+          let initialRating = 0
+          let popmFound = false
+
+          // 1. Prioritize native ID3v2 structures for POPM frame (desktop helper app values)
+          const nativeFormats = ['ID3v2.3', 'ID3v2.4', 'ID3v2.2']
+          for (const format of nativeFormats) {
+            const tags = metadata.native[format]
+            if (tags) {
+              const popmTag = tags.find(t => t.id === 'POPM')
+              if (popmTag && popmTag.value) {
+                let rawRating = 0
+                if (typeof popmTag.value === 'object' && popmTag.value !== null) {
+                  rawRating = (popmTag.value as any).rating ?? 0
+                } else if (typeof popmTag.value === 'number') {
+                  rawRating = popmTag.value
+                }
+
+                if (rawRating > 0) {
+                  if (rawRating <= 63) initialRating = 1
+                  else if (rawRating <= 127) initialRating = 2
+                  else if (rawRating <= 195) initialRating = 3
+                  else if (rawRating <= 254) initialRating = 4
+                  else if (rawRating === 255) initialRating = 5
+                  popmFound = true
+                  break
+                }
+              }
+            }
+          }
+
+          // 2. Fallback: Check common rating mapping
+          if (!popmFound) {
+            const ratings = metadata.common.rating
+            if (ratings && ratings.length > 0) {
+              const r = ratings[0].rating
+              if (r > 1) {
+                initialRating = Math.round((r / 255) * 5)
+              } else {
+                initialRating = Math.round(r * 5)
+              }
+            }
+          }
+
+          if (initialRating > 0) {
+            setTracks(prev => prev.map(t => {
+              const matches = (hash && t.hash === hash) || (t.filename === file.name)
+              if (matches && t.qualityRating !== initialRating) {
+                return { ...t, qualityRating: initialRating }
+              }
+              return t
+            }))
+          }
+        } catch (err) {
+          console.warn('Failed to parse duplicate file metadata for rating update:', file.name, err)
+        }
+      })).then(() => {
+        setStatus(`Staged library ratings updated from selected files.`)
+      })
+    }
+
     if (!newFiles.length) {
-      setStatus(`All ${accepted.length} file(s) already imported (detected by hash/name).`)
       event.target.value = ''
       return
     }
@@ -595,6 +671,10 @@ function App() {
       let initialRating = 0
       try {
         const metadata = await mm.parseBlob(file)
+        console.log(`[Import] File: ${file.name}`, {
+          common: metadata.common,
+          native: metadata.native
+        })
         let popmFound = false
 
         // 1. Prioritize native ID3v2 structures for POPM frame (desktop helper app values)
