@@ -1,15 +1,19 @@
 import os
 import sys
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
 
 # Ensure mutagen and just_playback are installed, otherwise prompt the user with instructions
+IMPORT_ERROR_MSG = ""
 try:
     from mutagen.id3 import ID3, TALB, TIT2, TPE1, POPM
     from mutagen.mp3 import MP3
     from just_playback import Playback
     DEPENDENCIES_AVAILABLE = True
-except ImportError:
+except ImportError as e:
+    import traceback
+    IMPORT_ERROR_MSG = traceback.format_exc()
     DEPENDENCIES_AVAILABLE = False
 
 
@@ -25,8 +29,17 @@ class RatingEditorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("DancePlayer Audio Rating Editor")
-        self.root.geometry("800x600")
-        self.root.minsize(700, 500)
+        self.root.geometry("900x650")
+        self.root.minsize(800, 500)
+
+        # Initialize fonts
+        self.font_normal = tkfont.Font(family="Arial", size=10)
+        self.font_bold = tkfont.Font(family="Arial", size=10, weight="bold")
+        self.font_small_bold = tkfont.Font(family="Arial", size=8, weight="bold")
+        self.font_title = tkfont.Font(family="Arial", size=12, weight="bold")
+        self.font_stars = tkfont.Font(family="Arial", size=20, weight="bold")
+        self.font_italic = tkfont.Font(family="Arial", size=9, slant="italic")
+        self.font_italic_large = tkfont.Font(family="Arial", size=11, slant="italic")
 
         # Style configurations
         self.style = ttk.Style()
@@ -88,13 +101,57 @@ class RatingEditorApp:
         cmd_entry.configure(state="readonly")
         cmd_entry.pack(pady=10)
 
+        if IMPORT_ERROR_MSG:
+            lbl_err = tk.Label(frame, text="Debug Info (Error Traceback):", fg="#ff5252", bg=self.bg_color, font=("Arial", 9, "bold"))
+            lbl_err.pack(pady=(10, 0))
+            txt_err = tk.Text(frame, height=10, width=60, font=("Courier", 8), bg="#121214", fg="#ff5252", bd=0)
+            txt_err.insert(tk.END, IMPORT_ERROR_MSG)
+            txt_err.configure(state="disabled")
+            txt_err.pack(pady=5)
+
         btn_retry = ttk.Button(frame, text="I installed them, try again!", command=self.restart_app)
         btn_retry.pack(pady=20)
 
     def restart_app(self):
         os.execv(sys.executable, ['python'] + sys.argv)
 
+    def scale_fonts(self, val):
+        factor = float(val) / 10.0
+        self.font_normal.configure(size=int(10 * factor))
+        self.font_bold.configure(size=int(10 * factor))
+        self.font_small_bold.configure(size=int(8 * factor))
+        self.font_title.configure(size=int(12 * factor))
+        self.font_stars.configure(size=int(20 * factor))
+        self.font_italic.configure(size=int(9 * factor))
+        self.font_italic_large.configure(size=int(11 * factor))
+        
+        # Configure treeview styles dynamically
+        self.style.configure("Treeview", font=self.font_normal, rowheight=int(25 * factor))
+        self.style.configure("Treeview.Heading", font=self.font_bold)
+
+    def format_stars(self, rating):
+        return "★" * rating + "☆" * (5 - rating)
+
     def build_ui(self):
+        # Configure Treeview style
+        self.style.configure("Treeview",
+            background="#121214",
+            foreground=self.fg_color,
+            fieldbackground="#121214",
+            rowheight=25,
+            font=self.font_normal
+        )
+        self.style.map("Treeview",
+            background=[("selected", self.accent_color)],
+            foreground=[("selected", "#ffffff")]
+        )
+        self.style.configure("Treeview.Heading",
+            background=self.btn_bg,
+            foreground=self.fg_color,
+            relief="flat",
+            font=self.font_bold
+        )
+
         # Top toolbar
         toolbar = tk.Frame(self.root, bg=self.bg_color, bd=1, relief="raised", height=50)
         toolbar.pack(fill="x", side="top", ipady=5)
@@ -109,7 +166,7 @@ class RatingEditorApp:
             bd=0,
             padx=15,
             pady=6,
-            font=("Arial", 10, "bold"),
+            font=self.font_bold,
             command=self.select_directory
         )
         btn_select_dir.pack(side="left", padx=15, pady=5)
@@ -119,19 +176,19 @@ class RatingEditorApp:
             text="No folder selected",
             fg="#8a9aa3",
             bg=self.bg_color,
-            font=("Arial", 9, "italic")
+            font=self.font_italic
         )
         self.label_folder.pack(side="left", padx=10)
 
-        # Main window split: Left side files list, Right side editor
+        # Main window split: Left side files table, Right side editor
         main_pane = tk.PanedWindow(self.root, orient="horizontal", bg=self.bg_color, bd=0, sashwidth=4)
         main_pane.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Left Panel (Files List)
+        # Left Panel (Files Table)
         left_frame = tk.Frame(main_pane, bg=self.bg_color)
         left_frame.pack(fill="both", expand=True)
 
-        lbl_list = tk.Label(left_frame, text="Audio Files (.mp3)", fg=self.fg_color, bg=self.bg_color, font=("Arial", 10, "bold"), anchor="w")
+        lbl_list = tk.Label(left_frame, text="Audio Files & Ratings (.mp3)", fg=self.fg_color, bg=self.bg_color, font=self.font_bold, anchor="w")
         lbl_list.pack(fill="x", pady=(0, 5))
 
         list_container = tk.Frame(left_frame, bg=self.bg_color)
@@ -140,63 +197,163 @@ class RatingEditorApp:
         scrollbar = tk.Scrollbar(list_container, orient="vertical")
         scrollbar.pack(side="right", fill="y")
 
-        self.files_listbox = tk.Listbox(
+        # Treeview table
+        self.files_tree = ttk.Treeview(
             list_container,
-            bg="#121214",
-            fg=self.fg_color,
-            selectbackground=self.accent_color,
-            selectforeground="#ffffff",
-            bd=0,
-            highlightthickness=0,
-            yscrollcommand=scrollbar.set,
-            font=("Arial", 10)
+            columns=("name", "rating"),
+            show="headings",
+            yscrollcommand=scrollbar.set
         )
-        self.files_listbox.pack(fill="both", expand=True)
-        scrollbar.config(command=self.files_listbox.yview)
-        self.files_listbox.bind("<<ListboxSelect>>", self.on_file_selected)
+        self.files_tree.heading("name", text="File Name", anchor="w")
+        self.files_tree.heading("rating", text="Rating", anchor="center")
+        self.files_tree.column("name", stretch=True, anchor="w")
+        self.files_tree.column("rating", stretch=False, width=120, anchor="center")
+        self.files_tree.pack(fill="both", expand=True)
 
-        # Right Panel (Editor View)
+        scrollbar.config(command=self.files_tree.yview)
+        self.files_tree.bind("<<TreeviewSelect>>", self.on_file_selected)
+
+        # Right Panel (Editor View + Bottom Controls)
         self.right_frame = tk.Frame(main_pane, bg="#252529", padx=15, pady=15)
         self.right_frame.pack(fill="both", expand=True)
 
+        # Bottom controls (Look & Feel)
+        self.bottom_controls = tk.Frame(self.right_frame, bg="#252529", pady=10)
+        self.bottom_controls.pack(side="bottom", fill="x")
+
+        # Initialize static font for controls to prevent them from resizing and shifting the slider
+        self.font_control = tkfont.Font(family="Arial", size=10)
+
+        # Left: Silent mode
+        self.silent_mode_var = tk.BooleanVar(value=False)
+        self.chk_silent = tk.Checkbutton(
+            self.bottom_controls,
+            text="Silent Mode (No Popups)",
+            variable=self.silent_mode_var,
+            bg="#252529",
+            fg=self.fg_color,
+            selectcolor="#252529",
+            activebackground="#252529",
+            activeforeground=self.fg_color,
+            font=self.font_control
+        )
+        self.chk_silent.pack(side="left", padx=5)
+
+        # Auto Play Mode
+        self.auto_play_var = tk.BooleanVar(value=False)
+        self.chk_autoplay = tk.Checkbutton(
+            self.bottom_controls,
+            text="Auto Play",
+            variable=self.auto_play_var,
+            bg="#252529",
+            fg=self.fg_color,
+            selectcolor="#252529",
+            activebackground="#252529",
+            activeforeground=self.fg_color,
+            font=self.font_control
+        )
+        self.chk_autoplay.pack(side="left", padx=5)
+
+        # Right: Font size slider
+        lbl_slider = tk.Label(self.bottom_controls, text="Font Size:", fg="#8a9aa3", bg="#252529", font=self.font_control)
+        lbl_slider.pack(side="left", padx=(20, 5))
+
+        self.font_slider = tk.Scale(
+            self.bottom_controls,
+            from_=6,
+            to=20,
+            orient="horizontal",
+            bg="#252529",
+            fg=self.fg_color,
+            highlightthickness=0,
+            troughcolor=self.btn_bg,
+            activebackground=self.accent_color,
+            showvalue=True,
+            font=self.font_control
+        )
+        self.font_slider.set(10)
+        self.font_slider.pack(side="left", fill="x", expand=True, padx=5)
+        
+        # Apply scaling only when user releases mouse click or key press
+        self.font_slider.bind("<ButtonRelease-1>", lambda e: self.scale_fonts(self.font_slider.get()))
+        self.font_slider.bind("<KeyRelease>", lambda e: self.scale_fonts(self.font_slider.get()))
+
+        # Top area: Editor details
+        self.editor_area = tk.Frame(self.right_frame, bg="#252529")
+        self.editor_area.pack(side="top", fill="both", expand=True)
+
         # Placeholder message when no file is selected
         self.placeholder_label = tk.Label(
-            self.right_frame,
+            self.editor_area,
             text="Select a song from the list to edit its metadata and ratings.",
             fg="#8a9aa3",
             bg="#252529",
-            font=("Arial", 11, "italic"),
+            font=self.font_italic_large,
             wraplength=300
         )
         self.placeholder_label.pack(expand=True)
 
         # Editor UI fields (initially hidden)
-        self.editor_container = tk.Frame(self.right_frame, bg="#252529")
+        self.editor_container = tk.Frame(self.editor_area, bg="#252529")
+        
+        # Action Buttons row (Save / Delete) - packed first at the bottom so it never gets squeezed
+        btn_actions_frame = tk.Frame(self.editor_container, bg="#252529")
+        btn_actions_frame.pack(side="bottom", fill="x", pady=(15, 0))
+
+        self.btn_save = tk.Button(
+            btn_actions_frame,
+            text="💾 Save Changes",
+            bg=self.accent_color,
+            fg="#ffffff",
+            activebackground="#008a52",
+            activeforeground="#ffffff",
+            bd=0,
+            padx=20,
+            pady=12,
+            font=self.font_bold,
+            command=self.save_metadata
+        )
+        self.btn_save.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+        self.btn_delete = tk.Button(
+            btn_actions_frame,
+            text="🗑 Delete File",
+            bg="#e53935",
+            fg="#ffffff",
+            activebackground="#b71c1c",
+            activeforeground="#ffffff",
+            bd=0,
+            padx=20,
+            pady=12,
+            font=self.font_bold,
+            command=self.delete_file
+        )
+        self.btn_delete.pack(side="right", fill="x", expand=True, padx=(10, 0))
         
         # File path display label
-        self.lbl_file_title = tk.Label(self.editor_container, text="Song Metadata", fg=self.fg_color, bg="#252529", font=("Arial", 12, "bold"), anchor="w")
+        self.lbl_file_title = tk.Label(self.editor_container, text="Song Metadata", fg=self.fg_color, bg="#252529", font=self.font_title, anchor="w")
         self.lbl_file_title.pack(fill="x", pady=(0, 10))
 
         # Title Field
-        lbl_title = tk.Label(self.editor_container, text="TITLE", fg="#8a9aa3", bg="#252529", font=("Arial", 8, "bold"), anchor="w")
+        lbl_title = tk.Label(self.editor_container, text="TITLE", fg="#8a9aa3", bg="#252529", font=self.font_small_bold, anchor="w")
         lbl_title.pack(fill="x", pady=(5, 2))
-        self.entry_title = tk.Entry(self.editor_container, bg=self.bg_color, fg=self.fg_color, insertbackground=self.fg_color, bd=1, relief="solid", font=("Arial", 10))
+        self.entry_title = tk.Entry(self.editor_container, bg=self.bg_color, fg=self.fg_color, insertbackground=self.fg_color, bd=1, relief="solid", font=self.font_normal)
         self.entry_title.pack(fill="x", ipady=4, pady=(0, 10))
 
         # Artist Field
-        lbl_artist = tk.Label(self.editor_container, text="ARTIST", fg="#8a9aa3", bg="#252529", font=("Arial", 8, "bold"), anchor="w")
+        lbl_artist = tk.Label(self.editor_container, text="ARTIST", fg="#8a9aa3", bg="#252529", font=self.font_small_bold, anchor="w")
         lbl_artist.pack(fill="x", pady=(5, 2))
-        self.entry_artist = tk.Entry(self.editor_container, bg=self.bg_color, fg=self.fg_color, insertbackground=self.fg_color, bd=1, relief="solid", font=("Arial", 10))
+        self.entry_artist = tk.Entry(self.editor_container, bg=self.bg_color, fg=self.fg_color, insertbackground=self.fg_color, bd=1, relief="solid", font=self.font_normal)
         self.entry_artist.pack(fill="x", ipady=4, pady=(0, 10))
 
         # Album Field
-        lbl_album = tk.Label(self.editor_container, text="ALBUM", fg="#8a9aa3", bg="#252529", font=("Arial", 8, "bold"), anchor="w")
+        lbl_album = tk.Label(self.editor_container, text="ALBUM", fg="#8a9aa3", bg="#252529", font=self.font_small_bold, anchor="w")
         lbl_album.pack(fill="x", pady=(5, 2))
-        self.entry_album = tk.Entry(self.editor_container, bg=self.bg_color, fg=self.fg_color, insertbackground=self.fg_color, bd=1, relief="solid", font=("Arial", 10))
+        self.entry_album = tk.Entry(self.editor_container, bg=self.bg_color, fg=self.fg_color, insertbackground=self.fg_color, bd=1, relief="solid", font=self.font_normal)
         self.entry_album.pack(fill="x", ipady=4, pady=(0, 10))
 
         # Rating Stars Field
-        lbl_rating = tk.Label(self.editor_container, text="RATING", fg="#8a9aa3", bg="#252529", font=("Arial", 8, "bold"), anchor="w")
+        lbl_rating = tk.Label(self.editor_container, text="RATING", fg="#8a9aa3", bg="#252529", font=self.font_small_bold, anchor="w")
         lbl_rating.pack(fill="x", pady=(5, 2))
         
         self.stars_frame = tk.Frame(self.editor_container, bg="#252529")
@@ -208,7 +365,7 @@ class RatingEditorApp:
                 text="☆",
                 fg=self.star_color,
                 bg="#252529",
-                font=("Arial", 20, "bold"),
+                font=self.font_stars,
                 cursor="hand2"
             )
             lbl_star.pack(side="left", padx=4)
@@ -226,7 +383,7 @@ class RatingEditorApp:
             bd=0,
             padx=8,
             pady=2,
-            font=("Arial", 9),
+            font=self.font_italic,
             command=self.clear_rating
         )
         self.btn_clear_rating.pack(side="left", padx=15)
@@ -236,8 +393,21 @@ class RatingEditorApp:
         sep.pack(fill="x", pady=10)
 
         # Playback Section
-        lbl_playback = tk.Label(self.editor_container, text="TEST PLAYBACK", fg="#8a9aa3", bg="#252529", font=("Arial", 8, "bold"), anchor="w")
+        lbl_playback = tk.Label(self.editor_container, text="TEST PLAYBACK", fg="#8a9aa3", bg="#252529", font=self.font_small_bold, anchor="w")
         lbl_playback.pack(fill="x", pady=(0, 5))
+
+        # Progress Bar Canvas
+        self.progress_canvas = tk.Canvas(
+            self.editor_container,
+            height=20,
+            bg="#252529",
+            highlightthickness=0,
+            cursor="hand2"
+        )
+        self.progress_canvas.pack(fill="x", pady=(0, 10))
+        self.progress_canvas.bind("<Configure>", self.draw_progress)
+        self.progress_canvas.bind("<Button-1>", self.on_progress_click)
+        self.progress_canvas.bind("<B1-Motion>", self.on_progress_click)
 
         self.playback_frame = tk.Frame(self.editor_container, bg="#252529")
         self.playback_frame.pack(fill="x", pady=(0, 15))
@@ -252,7 +422,7 @@ class RatingEditorApp:
             bd=0,
             padx=12,
             pady=6,
-            font=("Arial", 9, "bold"),
+            font=self.font_bold,
             command=self.toggle_play
         )
         self.btn_play.pack(side="left", padx=(0, 10))
@@ -267,7 +437,7 @@ class RatingEditorApp:
             bd=0,
             padx=12,
             pady=6,
-            font=("Arial", 9, "bold"),
+            font=self.font_bold,
             command=self.seek_forward_15
         )
         self.btn_seek.pack(side="left", padx=(0, 15))
@@ -277,47 +447,13 @@ class RatingEditorApp:
             text="00:00 / 00:00",
             fg=self.fg_color,
             bg="#252529",
-            font=("Arial", 10)
+            font=self.font_normal
         )
         self.lbl_time.pack(side="left")
 
-        # Action Buttons row (Save Changes)
-        btn_actions_frame = tk.Frame(self.editor_container, bg="#252529")
-        btn_actions_frame.pack(fill="x", pady=(10, 0))
-
-        self.btn_save = tk.Button(
-            btn_actions_frame,
-            text="💾 Save Changes",
-            bg=self.accent_color,
-            fg="#ffffff",
-            activebackground="#008a52",
-            activeforeground="#ffffff",
-            bd=0,
-            padx=20,
-            pady=8,
-            font=("Arial", 10, "bold"),
-            command=self.save_metadata
-        )
-        self.btn_save.pack(side="left")
-
-        self.btn_delete = tk.Button(
-            btn_actions_frame,
-            text="🗑 Delete File",
-            bg="#e53935",
-            fg="#ffffff",
-            activebackground="#b71c1c",
-            activeforeground="#ffffff",
-            bd=0,
-            padx=20,
-            pady=8,
-            font=("Arial", 10, "bold"),
-            command=self.delete_file
-        )
-        self.btn_delete.pack(side="right")
-
-        # Add both frames to pane
-        main_pane.add(left_frame, minsize=200, stretch="always")
-        main_pane.add(self.right_frame, minsize=350, stretch="always")
+        # Add both panels to pane
+        main_pane.add(left_frame, minsize=250, stretch="always")
+        main_pane.add(self.right_frame, minsize=400, stretch="always")
 
         # Start periodic label updater loop
         self.update_playback_loop()
@@ -344,10 +480,6 @@ class RatingEditorApp:
             pass
         return 0
 
-    def format_listbox_item(self, rel_path, rating):
-        stars = "★" * rating + "☆" * (5 - rating)
-        return f"{rel_path} [{stars}]"
-
     def select_directory(self):
         folder = filedialog.askdirectory(title="Choose Audio Folder")
         if not folder:
@@ -366,9 +498,10 @@ class RatingEditorApp:
                     rating = self.get_file_rating(full_path)
                     self.mp3_files.append((rel_path, full_path, rating))
 
-        self.files_listbox.delete(0, tk.END)
+        # Clear and insert into Treeview
+        self.files_tree.delete(*self.files_tree.get_children())
         for rel_path, _, rating in self.mp3_files:
-            self.files_listbox.insert(tk.END, self.format_listbox_item(rel_path, rating))
+            self.files_tree.insert("", tk.END, values=(rel_path, self.format_stars(rating)))
 
         self.selected_file_path = None
         self.confirm_delete_going_forward = True
@@ -377,11 +510,12 @@ class RatingEditorApp:
         self.placeholder_label.pack(expand=True)
 
     def on_file_selected(self, event):
-        selection = self.files_listbox.curselection()
+        selection = self.files_tree.selection()
         if not selection:
             return
         
-        idx = selection[0]
+        item_id = selection[0]
+        idx = self.files_tree.index(item_id)
         _, self.selected_file_path, _ = self.mp3_files[idx]
         
         self.placeholder_label.pack_forget()
@@ -390,10 +524,12 @@ class RatingEditorApp:
         self.stop_playback()
         self.load_metadata(self.selected_file_path)
 
+        if self.auto_play_var.get():
+            self.toggle_play()
+
     def load_metadata(self, filepath):
         try:
             audio = MP3(filepath, ID3=ID3)
-            # Ensure ID3 tags initialized
             if audio.tags is None:
                 audio.add_tags()
             tags = audio.tags
@@ -434,7 +570,6 @@ class RatingEditorApp:
         popm_frames = tags.getall("POPM")
         if popm_frames:
             raw_rating = popm_frames[0].rating
-            # Convert raw POPM rating byte value (0-255) to 1-5 stars scale
             if 1 <= raw_rating <= 63:
                 rating_val = 1
             elif 64 <= raw_rating <= 127:
@@ -448,6 +583,7 @@ class RatingEditorApp:
         
         self.set_rating_stars(rating_val)
         self.update_time_label()
+        self.draw_progress()
 
     def set_rating_stars(self, count):
         self.selected_rating = count
@@ -472,7 +608,6 @@ class RatingEditorApp:
             self.btn_play.config(text="⏸ Pause", bg=self.accent_color)
         else:
             if self.playback.curr_pos >= self.playback.duration - 0.5:
-                # Seek to start if near the end
                 self.playback.seek(0)
             self.playback.play()
             self.btn_play.config(text="⏸ Pause", bg=self.accent_color)
@@ -483,6 +618,7 @@ class RatingEditorApp:
         new_pos = min(self.playback.duration, max(0.0, self.playback.curr_pos) + 15.0)
         self.playback.seek(new_pos)
         self.update_time_label()
+        self.draw_progress()
 
     def stop_playback(self):
         if self.playback:
@@ -492,6 +628,7 @@ class RatingEditorApp:
                 pass
             self.btn_play.config(text="▶ Play", bg=self.btn_bg)
             self.update_time_label()
+            self.draw_progress()
 
     def update_time_label(self):
         if not self.playback:
@@ -505,18 +642,81 @@ class RatingEditorApp:
         if self.playback:
             if self.playback.playing:
                 self.update_time_label()
+                self.draw_progress()
                 if self.playback.curr_pos >= self.playback.duration - 0.1:
                     self.stop_playback()
             elif self.btn_play.cget("text") == "⏸ Pause":
                 self.stop_playback()
         self.root.after(200, self.update_playback_loop)
 
+    def draw_progress(self, event=None):
+        if not hasattr(self, 'progress_canvas'):
+            return
+        self.progress_canvas.delete("all")
+        width = self.progress_canvas.winfo_width()
+        height = self.progress_canvas.winfo_height()
+        
+        # Center vertical coordinate
+        y = height // 2
+        
+        # Draw background track
+        track_bg = "#404040"
+        self.progress_canvas.create_line(10, y, width - 10, y, fill=track_bg, width=4, capstyle="round")
+        
+        # Calculate progress ratio
+        if self.playback and self.playback.duration:
+            ratio = max(0.0, min(1.0, self.playback.curr_pos / self.playback.duration))
+        else:
+            ratio = 0.0
+            
+        progress_x = 10 + ratio * (width - 20)
+        
+        # Draw active progress line
+        if ratio > 0:
+            self.progress_canvas.create_line(10, y, progress_x, y, fill=self.accent_color, width=4, capstyle="round")
+            
+        # Draw progress circle handle
+        r = 6  # Radius of the circle
+        self.progress_canvas.create_oval(
+            progress_x - r, y - r, progress_x + r, y + r,
+            fill="#ffffff", outline=self.accent_color, width=2
+        )
+
+    def on_progress_click(self, event):
+        if not self.playback or not self.playback.duration:
+            return
+        width = self.progress_canvas.winfo_width()
+        x = max(10, min(width - 10, event.x))
+        ratio = (x - 10) / (width - 20)
+        target_pos = ratio * self.playback.duration
+        self.playback.seek(target_pos)
+        self.update_time_label()
+        self.draw_progress()
+
+    def select_next_song_and_play(self):
+        children = self.files_tree.get_children()
+        if not children:
+            return
+        selection = self.files_tree.selection()
+        if not selection:
+            return
+        
+        current_id = selection[0]
+        current_idx = self.files_tree.index(current_id)
+        next_idx = current_idx + 1
+        if next_idx < len(children):
+            next_id = children[next_idx]
+            self.files_tree.selection_set(next_id)
+            self.files_tree.see(next_id)
+            if not self.playback or not self.playback.playing:
+                self.toggle_play()
+
     def save_metadata(self):
         if not self.selected_file_path:
             return
 
         try:
-            # Release the file handle on Windows so mutagen can write to it without permission denial
+            # Release file handle on Windows before writing tags
             self.stop_playback()
             self.playback = None
 
@@ -546,26 +746,28 @@ class RatingEditorApp:
 
             audio.save()
 
-            # Re-initialize/load the playback since we released it
+            # Re-initialize/load playback since we released it
             if DEPENDENCIES_AVAILABLE:
                 try:
                     self.playback = Playback()
                     self.playback.load_file(self.selected_file_path)
                 except Exception as e:
-                    print("Warning: Could not re-initialize audio device:", e)
+                     print("Warning: Could not re-initialize audio device:", e)
             
-            # Update rating in mp3_files and listbox
+            # Update rating in mp3_files and treeview
             for i, (rel_path, path, rating) in enumerate(self.mp3_files):
                 if path == self.selected_file_path:
                     self.mp3_files[i] = (rel_path, path, self.selected_rating)
-                    self.files_listbox.delete(i)
-                    self.files_listbox.insert(i, self.format_listbox_item(rel_path, self.selected_rating))
-                    self.files_listbox.selection_set(i)
+                    item_id = self.files_tree.get_children()[i]
+                    self.files_tree.item(item_id, values=(rel_path, self.format_stars(self.selected_rating)))
                     break
 
-            messagebox.showinfo("Success", "Metadata saved successfully!")
+            if not self.silent_mode_var.get():
+                messagebox.showinfo("Success", "Metadata saved successfully!")
+
+            self.select_next_song_and_play()
         except Exception as e:
-            # Re-initialize/load playback on failure as well
+            # Re-initialize playback on failure
             if self.playback is None and DEPENDENCIES_AVAILABLE:
                 try:
                     self.playback = Playback()
@@ -578,15 +780,16 @@ class RatingEditorApp:
         if not self.selected_file_path:
             return
 
-        if self.confirm_delete_going_forward:
-            answer = messagebox.askyesno(
-                "Confirm Deletion",
-                "Are you sure you want to delete this file?\n\nFuture deletions in this folder will NOT show this confirmation warning.",
-                parent=self.root
-            )
-            if not answer:
-                return
-            self.confirm_delete_going_forward = False
+        if not self.silent_mode_var.get():
+            if self.confirm_delete_going_forward:
+                answer = messagebox.askyesno(
+                    "Confirm Deletion",
+                    "Are you sure you want to delete this file?\n\nFuture deletions in this folder will NOT show this confirmation warning.",
+                    parent=self.root
+                )
+                if not answer:
+                    return
+                self.confirm_delete_going_forward = False
 
         # Release the file handle on Windows before deletion
         self.stop_playback()
@@ -598,20 +801,36 @@ class RatingEditorApp:
             messagebox.showerror("Error", f"Failed to delete file:\n{e}", parent=self.root)
             return
 
-        # Find and remove it from lists
+        # Find the index of the deleted song before removing it
         filepath_deleted = self.selected_file_path
+        deleted_idx = -1
+        for idx, item in enumerate(self.mp3_files):
+            if item[1] == filepath_deleted:
+                deleted_idx = idx
+                break
+
+        # Remove from local list
         self.mp3_files = [item for item in self.mp3_files if item[1] != filepath_deleted]
 
-        # Refresh Listbox
-        self.files_listbox.delete(0, tk.END)
+        # Refresh Treeview
+        self.files_tree.delete(*self.files_tree.get_children())
         for rel_path, _, rating in self.mp3_files:
-            self.files_listbox.insert(tk.END, self.format_listbox_item(rel_path, rating))
+            self.files_tree.insert("", tk.END, values=(rel_path, self.format_stars(rating)))
 
-        # Clear selection and view
-        self.selected_file_path = None
-        self.editor_container.pack_forget()
-        self.placeholder_label.pack(expand=True)
-        messagebox.showinfo("Deleted", "File deleted successfully.", parent=self.root)
+        # Automatically select the next song if available
+        if deleted_idx != -1 and len(self.mp3_files) > 0:
+            next_idx = min(deleted_idx, len(self.mp3_files) - 1)
+            next_item_id = self.files_tree.get_children()[next_idx]
+            self.files_tree.selection_set(next_item_id)
+            self.files_tree.see(next_item_id)
+        else:
+            # Clear selection and view if no files are left
+            self.selected_file_path = None
+            self.editor_container.pack_forget()
+            self.placeholder_label.pack(expand=True)
+        
+        if not self.silent_mode_var.get():
+            messagebox.showinfo("Deleted", "File deleted successfully.", parent=self.root)
 
     def on_close(self):
         self.stop_playback()

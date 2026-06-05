@@ -1614,11 +1614,9 @@ function App() {
                 <div className="track-info">
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                     <span className="track-title">{track.title}</span>
-                    {track.qualityRating > 0 && (
-                      <span className="track-stars" style={{ color: 'var(--sun)', fontSize: '0.95rem', userSelect: 'none', letterSpacing: '0.5px' }}>
-                        {'★'.repeat(track.qualityRating) + '☆'.repeat(5 - track.qualityRating)}
-                      </span>
-                    )}
+                    <span className="track-stars" style={{ color: 'var(--sun)', fontSize: '0.95rem', userSelect: 'none', letterSpacing: '0.5px' }}>
+                      {'★'.repeat(track.qualityRating || 0) + '☆'.repeat(5 - (track.qualityRating || 0))}
+                    </span>
                   </div>
                   <span className="track-meta">
                     <select
