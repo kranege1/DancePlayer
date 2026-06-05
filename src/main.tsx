@@ -1,3 +1,8 @@
+import { Buffer } from 'buffer'
+if (typeof window !== 'undefined') {
+  (window as any).Buffer = Buffer
+}
+
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'

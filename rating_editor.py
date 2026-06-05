@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import tkinter as tk
 import tkinter.font as tkfont
 from tkinter import filedialog, messagebox, ttk
@@ -179,6 +180,22 @@ class RatingEditorApp:
             font=self.font_italic
         )
         self.label_folder.pack(side="left", padx=10)
+
+        self.btn_sync_backup = tk.Button(
+            toolbar,
+            text="🔄 Sync from JSON Backup",
+            bg=self.btn_bg,
+            fg=self.fg_color,
+            activebackground=self.btn_active,
+            activeforeground=self.fg_color,
+            bd=0,
+            padx=15,
+            pady=6,
+            font=self.font_bold,
+            command=self.sync_from_backup
+        )
+        self.btn_sync_backup.pack(side="left", padx=15, pady=5)
+        self.btn_sync_backup.config(state="disabled")
 
         # Main window split: Left side files table, Right side editor
         main_pane = tk.PanedWindow(self.root, orient="horizontal", bg=self.bg_color, bd=0, sashwidth=4)
@@ -508,6 +525,7 @@ class RatingEditorApp:
         self.stop_playback()
         self.editor_container.pack_forget()
         self.placeholder_label.pack(expand=True)
+        self.btn_sync_backup.config(state="normal")
 
     def on_file_selected(self, event):
         selection = self.files_tree.selection()
@@ -744,7 +762,7 @@ class RatingEditorApp:
                 }
                 tags.setall("POPM", [POPM(email=email_key, rating=rating_bytes[self.selected_rating])])
 
-            audio.save()
+            audio.save(v2_version=3)
 
             # Re-initialize/load playback since we released it
             if DEPENDENCIES_AVAILABLE:
@@ -835,6 +853,321 @@ class RatingEditorApp:
     def on_close(self):
         self.stop_playback()
         self.root.destroy()
+
+    def sync_from_backup(self):
+        if not self.current_folder:
+            return
+
+        json_path = filedialog.askopenfilename(
+            title="Choose Library Backup JSON",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+        if not json_path:
+            return
+
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read JSON backup file:\n{e}", parent=self.root)
+            return
+
+        if not isinstance(data, dict) or "tracks" not in data:
+            messagebox.showerror("Error", "Invalid backup JSON: 'tracks' array not found.", parent=self.root)
+            return
+
+        backup_tracks = data["tracks"]
+        
+        # Build lookup tables
+        backup_by_filename = {}
+        backup_by_title_artist = {}
+        
+        for t in backup_tracks:
+            filename = t.get("filename")
+            if filename:
+                basename = os.path.basename(filename).lower()
+                backup_by_filename[basename] = t
+            title = t.get("title")
+            artist = t.get("artist")
+            if title:
+                key = (title.strip().lower(), (artist or "").strip().lower())
+                backup_by_title_artist[key] = t
+
+        # Compare loaded files with backup
+        diff_list = []
+        
+        for rel_path, full_path, current_rating in self.mp3_files:
+            try:
+                audio = MP3(full_path, ID3=ID3)
+                if audio.tags is None:
+                    audio.add_tags()
+                tags = audio.tags
+            except Exception:
+                continue
+
+            current_title = str(tags.get("TIT2", "")).strip()
+            current_artist = str(tags.get("TPE1", "")).strip()
+
+            # Find matching backup track
+            matched_track = None
+            
+            basename = os.path.basename(full_path).lower()
+            if basename in backup_by_filename:
+                matched_track = backup_by_filename[basename]
+            
+            if not matched_track:
+                rel_lower = rel_path.replace("\\", "/").lower()
+                for t in backup_tracks:
+                    t_filename = t.get("filename")
+                    if t_filename and t_filename.replace("\\", "/").lower() == rel_lower:
+                        matched_track = t
+                        break
+
+            if not matched_track and current_title:
+                key = (current_title.lower(), current_artist.lower())
+                if key in backup_by_title_artist:
+                    matched_track = backup_by_title_artist[key]
+
+            if matched_track:
+                backup_title = matched_track.get("title", "").strip()
+                backup_artist = matched_track.get("artist", "").strip()
+                backup_rating = matched_track.get("qualityRating", 0)
+
+                # Compare rating
+                if current_rating != backup_rating:
+                    diff_list.append({
+                        "filepath": full_path,
+                        "rel_path": rel_path,
+                        "field": "rating",
+                        "old_val": current_rating,
+                        "new_val": backup_rating
+                    })
+
+                # Compare Title
+                if backup_title and current_title != backup_title:
+                    diff_list.append({
+                        "filepath": full_path,
+                        "rel_path": rel_path,
+                        "field": "title",
+                        "old_val": current_title,
+                        "new_val": backup_title
+                    })
+
+                # Compare Artist
+                if backup_artist and current_artist != backup_artist:
+                    diff_list.append({
+                        "filepath": full_path,
+                        "rel_path": rel_path,
+                        "field": "artist",
+                        "old_val": current_artist,
+                        "new_val": backup_artist
+                    })
+
+        if not diff_list:
+            messagebox.showinfo("No Differences", "No metadata differences found between loaded files and backup JSON.", parent=self.root)
+            return
+
+        SyncDialog(self.root, diff_list, self.apply_metadata_sync)
+
+    def apply_metadata_sync(self, selected_diffs):
+        changes_by_file = {}
+        for diff in selected_diffs:
+            filepath = diff["filepath"]
+            if filepath not in changes_by_file:
+                changes_by_file[filepath] = []
+            changes_by_file[filepath].append(diff)
+
+        success_count = 0
+        error_files = []
+
+        self.stop_playback()
+        self.playback = None
+
+        for filepath, diffs in changes_by_file.items():
+            try:
+                audio = MP3(filepath, ID3=ID3)
+                if audio.tags is None:
+                    audio.add_tags()
+                tags = audio.tags
+
+                for diff in diffs:
+                    field = diff["field"]
+                    val = diff["new_val"]
+                    
+                    if field == "title":
+                        tags["TIT2"] = TIT2(encoding=3, text=[str(val).strip()])
+                    elif field == "artist":
+                        tags["TPE1"] = TPE1(encoding=3, text=[str(val).strip()])
+                    elif field == "rating":
+                        email_key = "Windows Media Player 9 Series"
+                        if val == 0:
+                            tags.delall("POPM")
+                        else:
+                            rating_bytes = {1: 1, 2: 64, 3: 128, 4: 196, 5: 255}
+                            tags.setall("POPM", [POPM(email=email_key, rating=rating_bytes[val])])
+
+                audio.save(v2_version=3)
+                success_count += len(diffs)
+            except Exception as e:
+                error_files.append((os.path.basename(filepath), str(e)))
+
+        self.refresh_mp3_ratings_after_sync()
+
+        if DEPENDENCIES_AVAILABLE:
+            try:
+                self.playback = Playback()
+            except Exception:
+                pass
+
+        if self.selected_file_path:
+            self.load_metadata(self.selected_file_path)
+
+        msg = f"Successfully synced {success_count} change(s)."
+        if error_files:
+            msg += "\n\nErrors occurred on following files:\n" + "\n".join(f"- {f}: {err}" for f, err in error_files)
+            messagebox.showerror("Sync Results", msg, parent=self.root)
+        else:
+            messagebox.showinfo("Sync Success", msg, parent=self.root)
+
+    def refresh_mp3_ratings_after_sync(self):
+        for i, (rel_path, path, old_rating) in enumerate(self.mp3_files):
+            new_rating = self.get_file_rating(path)
+            self.mp3_files[i] = (rel_path, path, new_rating)
+
+        self.files_tree.delete(*self.files_tree.get_children())
+        for rel_path, _, rating in self.mp3_files:
+            self.files_tree.insert("", tk.END, values=(rel_path, self.format_stars(rating)))
+
+
+class SyncDialog(tk.Toplevel):
+    def __init__(self, parent, diff_list, on_sync):
+        super().__init__(parent)
+        self.title("Metadata Difference Sync Preview")
+        self.geometry("800x500")
+        self.transient(parent)
+        self.grab_set()
+        
+        self.diff_list = diff_list
+        self.on_sync = on_sync
+        self.vars = {}
+
+        self.configure(bg="#1e1e24")
+        
+        lbl_title = tk.Label(
+            self,
+            text="Confirm Metadata Changes from Backup JSON",
+            font=("Arial", 12, "bold"),
+            bg="#1e1e24",
+            fg="#ffffff"
+        )
+        lbl_title.pack(pady=10)
+
+        lbl_desc = tk.Label(
+            self,
+            text="The following differences were found between your local MP3 files and the backup library JSON.\nSelect the changes you want to write back to the files.",
+            font=("Arial", 9),
+            bg="#1e1e24",
+            fg="#8a9aa3",
+            justify="left"
+        )
+        lbl_desc.pack(padx=15, pady=(0, 10), fill="x")
+
+        frame_table = tk.Frame(self, bg="#1e1e24")
+        frame_table.pack(fill="both", expand=True, padx=15, pady=5)
+
+        scrollbar = tk.Scrollbar(frame_table, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+
+        self.canvas = tk.Canvas(frame_table, bg="#121214", highlightthickness=0)
+        self.canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.config(command=self.canvas.yview)
+        self.canvas.config(yscrollcommand=scrollbar.set)
+
+        self.scroll_frame = tk.Frame(self.canvas, bg="#121214")
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
+
+        self.scroll_frame.bind("<Configure>", self.on_frame_configure)
+        self.canvas.bind("<Configure>", self.on_canvas_configure)
+
+        headers = ["Sync", "File Name", "Field", "Current (File)", "New (Backup)"]
+        widths = [50, 250, 80, 150, 150]
+        
+        header_frame = tk.Frame(self.scroll_frame, bg="#2d2d30")
+        header_frame.pack(fill="x", ipady=4)
+        
+        for text, width in zip(headers, widths):
+            lbl = tk.Label(header_frame, text=text, fg="#ffffff", bg="#2d2d30", font=("Arial", 9, "bold"), width=width//8, anchor="w" if text != "Sync" else "center")
+            lbl.pack(side="left", padx=5)
+
+        for idx, diff in enumerate(self.diff_list):
+            row_frame = tk.Frame(self.scroll_frame, bg="#121214", bd=1, relief="flat")
+            row_frame.pack(fill="x", ipady=2)
+            
+            var = tk.BooleanVar(value=True)
+            self.vars[idx] = var
+            chk = tk.Checkbutton(row_frame, variable=var, bg="#121214", activebackground="#121214", selectcolor="#252529")
+            chk.pack(side="left", padx=(10, 5))
+            
+            lbl_file = tk.Label(row_frame, text=diff["rel_path"], fg="#ffffff", bg="#121214", font=("Arial", 9), width=250//8, anchor="w")
+            lbl_file.pack(side="left", padx=5)
+            
+            lbl_field = tk.Label(row_frame, text=diff["field"].upper(), fg="#8a9aa3", bg="#121214", font=("Arial", 9, "bold"), width=80//8, anchor="w")
+            lbl_field.pack(side="left", padx=5)
+            
+            old_str = "★" * diff["old_val"] + "☆" * (5 - diff["old_val"]) if diff["field"] == "rating" else str(diff["old_val"])
+            lbl_old = tk.Label(row_frame, text=old_str, fg="#e53935", bg="#121214", font=("Arial", 9), width=150//8, anchor="w")
+            lbl_old.pack(side="left", padx=5)
+            
+            new_str = "★" * diff["new_val"] + "☆" * (5 - diff["new_val"]) if diff["field"] == "rating" else str(diff["new_val"])
+            lbl_new = tk.Label(row_frame, text=new_str, fg="#00b06b", bg="#121214", font=("Arial", 9), width=150//8, anchor="w")
+            lbl_new.pack(side="left", padx=5)
+
+        btn_frame = tk.Frame(self, bg="#1e1e24", pady=15)
+        btn_frame.pack(fill="x", side="bottom")
+
+        btn_sync = tk.Button(
+            btn_frame,
+            text="🔄 Sync Selected Changes",
+            bg="#00b06b",
+            fg="#ffffff",
+            activebackground="#008a52",
+            activeforeground="#ffffff",
+            bd=0,
+            padx=20,
+            pady=10,
+            font=("Arial", 10, "bold"),
+            command=self.sync_selected
+        )
+        btn_sync.pack(side="right", padx=(10, 20))
+
+        btn_cancel = tk.Button(
+            btn_frame,
+            text="Cancel",
+            bg="#2d2d30",
+            fg="#ffffff",
+            activebackground="#3e3e42",
+            activeforeground="#ffffff",
+            bd=0,
+            padx=20,
+            pady=10,
+            font=("Arial", 10, "bold"),
+            command=self.destroy
+        )
+        btn_cancel.pack(side="right")
+
+    def on_frame_configure(self, event):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def on_canvas_configure(self, event):
+        self.canvas.itemconfig(self.canvas_window, width=event.width)
+
+    def sync_selected(self):
+        selected_diffs = [self.diff_list[idx] for idx, var in self.vars.items() if var.get()]
+        if not selected_diffs:
+            messagebox.showinfo("No Selection", "No changes selected for sync.", parent=self)
+            return
+        self.on_sync(selected_diffs)
+        self.destroy()
 
 
 def report_callback_exception(exc, val, tb):

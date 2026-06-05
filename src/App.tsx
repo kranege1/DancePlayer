@@ -253,6 +253,7 @@ function App() {
   const [playlist, setPlaylist] = useState<Playlist>(() => persistedState.playlist ?? initialPlaylist)
   const [settings, setSettings] = useState<AppSettings>(() => persistedState.settings ?? initialSettings)
   const [sessionRule, setSessionRule] = useState<SessionRule>(() => persistedState.sessionRule ?? initialSessionRule)
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
   const [status, setStatus] = useState(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY)
@@ -385,6 +386,22 @@ function App() {
     // Hide tracks already distributed — Songs tab is a staging area for new imports only
     return tracks.filter((t) => !distributedTrackIds.has(t.id))
   }, [tracks, distributedTrackIds])
+
+  useEffect(() => {
+    const visibleIds = new Set(visibleTracks.map((t) => t.id))
+    setSelectedTrackIds((prev) => {
+      const next = new Set<string>()
+      prev.forEach((id) => {
+        if (visibleIds.has(id)) {
+          next.add(id)
+        }
+      })
+      if (next.size !== prev.size) {
+        return next
+      }
+      return prev
+    })
+  }, [visibleTracks])
 
   const playableEntries = useMemo(() => {
     return playlist.entries
@@ -785,6 +802,8 @@ function App() {
       return next
     })
   }
+
+
 
   function clearSelection() {
     setSelectedTrackIds(new Set())
@@ -1618,6 +1637,35 @@ function App() {
                 <button type="button" onClick={selectHighConfidence}>
                   High confidence ({visibleTracks.filter((t) => !isLowConfidenceTrack(t)).length})
                 </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.06)', padding: '4px 12px', borderRadius: '20px', fontSize: '0.85rem', flexWrap: 'wrap' }}>
+                  <span style={{ opacity: 0.85, fontWeight: 500 }}>Select Rating:</span>
+                  {[5, 4, 3, 2, 1].map((r) => {
+                    const matching = visibleTracks.filter((t) => (t.qualityRating ?? 0) === r)
+                    if (matching.length === 0) return null
+                    const checked = matching.every((t) => selectedTrackIds.has(t.id))
+                    return (
+                      <label key={r} style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', userSelect: 'none', margin: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            setSelectedTrackIds((prev) => {
+                              const next = new Set(prev)
+                              if (checked) {
+                                matching.forEach((t) => next.delete(t.id))
+                              } else {
+                                matching.forEach((t) => next.add(t.id))
+                              }
+                              return next
+                            })
+                          }}
+                          style={{ margin: 0, width: '14px', height: '14px', cursor: 'pointer' }}
+                        />
+                        <span>{r}★ ({matching.length})</span>
+                      </label>
+                    )
+                  })}
+                </div>
                 {selectedTrackIds.size > 0 && (
                   <>
                     <button type="button" className="cta" onClick={addSelectedToPlaylist}>
@@ -2500,21 +2548,7 @@ function App() {
           <button
             type="button"
             className="btn-danger"
-            onClick={() => {
-              if (!window.confirm('Delete ALL songs, playlists and cached audio?\nThis cannot be undone.')) return
-              void clearAllAudioFiles()
-              localStorage.removeItem(STORAGE_KEY)
-              setTracks([])
-              setPlaylist(initialPlaylist)
-              setDancePlaylists([])
-              setSavedPlaylists([])
-              setSettings(initialSettings)
-              setSessionRule(initialSessionRule)
-              setSelectedTrackIds(new Set())
-              setFileMap({})
-              setActiveEntryId(null)
-              setStatus('App reset to default.')
-            }}
+            onClick={() => setShowResetConfirm(true)}
           >
             🗑 Reset app to default
           </button>
@@ -3125,6 +3159,49 @@ function App() {
           </div>
         )
       })()}
+
+      {showResetConfirm && (
+        <div className="edit-modal-overlay" style={{ zIndex: 1100 }} onClick={() => setShowResetConfirm(false)}>
+          <div className="edit-modal" style={{ maxWidth: '400px' }} onClick={(e) => e.stopPropagation()}>
+            <h3 className="edit-modal-title" style={{ color: '#b71c1c' }}>Confirm Reset</h3>
+            <p style={{ margin: '15px 0', color: 'var(--text-light)', lineHeight: '1.5' }}>
+              Are you sure you want to delete ALL songs, playlists, and cached audio? This action is permanent and cannot be undone.
+            </p>
+            <div className="edit-modal-row" style={{ marginTop: '20px', gap: '10px', display: 'flex' }}>
+              <button
+                type="button"
+                className="btn-danger"
+                style={{ flex: 1, padding: '10px' }}
+                onClick={() => {
+                  void clearAllAudioFiles()
+                  localStorage.removeItem(STORAGE_KEY)
+                  setTracks([])
+                  setPlaylist(initialPlaylist)
+                  setDancePlaylists([])
+                  setSavedPlaylists([])
+                  setSettings(initialSettings)
+                  setSessionRule(initialSessionRule)
+                  setSelectedTrackIds(new Set())
+                  setFileMap({})
+                  setActiveEntryId(null)
+                  setShowResetConfirm(false)
+                  setStatus('App reset to default.')
+                }}
+              >
+                Yes, Reset Everything
+              </button>
+              <button
+                type="button"
+                className="edit-modal-close"
+                style={{ flex: 1, margin: 0, padding: '10px' }}
+                onClick={() => setShowResetConfirm(false)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
