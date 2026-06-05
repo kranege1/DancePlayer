@@ -96,6 +96,7 @@ const initialSettings: AppSettings = {
   speedPct: 0,
   wdsfTimedMode: false,
   language: 'en',
+  playSequence: 'default',
 }
 
 const initialPlaylist: Playlist = {
@@ -404,22 +405,50 @@ function App() {
   }, [visibleTracks])
 
   const playableEntries = useMemo(() => {
+    const seq = settings.playSequence ?? 'default'
+    if (seq === 'rating') {
+      const tracksOnly = playlist.entries.filter(e => e.type === 'track')
+      const breaksOnly = playlist.entries.filter(e => e.type === 'break')
+      const sortedTracks = [...tracksOnly].sort((a, b) => {
+        const ratingA = tracksById[a.trackId]?.qualityRating ?? 0
+        const ratingB = tracksById[b.trackId]?.qualityRating ?? 0
+        if (ratingB !== ratingA) {
+          return ratingB - ratingA
+        }
+        const titleA = tracksById[a.trackId]?.title ?? ''
+        const titleB = tracksById[b.trackId]?.title ?? ''
+        return titleA.localeCompare(titleB)
+      })
+      return [...sortedTracks, ...breaksOnly]
+    }
+    if (seq === 'shuffle') {
+      const hashString = (str: string) => {
+        let hash = 0
+        for (let i = 0; i < str.length; i++) {
+          hash = str.charCodeAt(i) + ((hash << 5) - hash)
+        }
+        return hash
+      }
+      return [...playlist.entries].sort((a, b) => {
+        return hashString(a.id) - hashString(b.id)
+      })
+    }
     return playlist.entries
-  }, [playlist.entries])
+  }, [playlist.entries, settings.playSequence, tracksById])
 
   const currentIndex = playableEntries.findIndex((entry) => entry.id === activeEntryId)
 
   const activeDanceType = useMemo(() => {
-    const entry = playlist.entries.find((e) => e.id === activeEntryId)
+    const entry = playableEntries.find((e) => e.id === activeEntryId)
     if (!entry || entry.type !== 'track') return null
     return tracksById[entry.trackId]?.danceType ?? null
-  }, [activeEntryId, playlist.entries, tracksById])
+  }, [activeEntryId, playableEntries, tracksById])
 
   const currentTrack = useMemo(() => {
-    const entry = playlist.entries.find((e) => e.id === activeEntryId)
+    const entry = playableEntries.find((e) => e.id === activeEntryId)
     if (!entry || entry.type !== 'track') return null
     return tracksById[entry.trackId] ?? null
-  }, [activeEntryId, playlist.entries, tracksById])
+  }, [activeEntryId, playableEntries, tracksById])
 
   function updateTrack(trackId: string, update: Partial<Track>) {
     setTracks((prev) => prev.map((track) => (track.id === trackId ? { ...track, ...update } : track)))
@@ -2334,6 +2363,40 @@ function App() {
             </summary>
             
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
+              {/* Playback Sequence */}
+              <div>
+                <h4 style={{ margin: '0 0 6px', fontSize: '0.9rem', borderBottom: '1px solid rgba(255, 255, 255, 0.15)', paddingBottom: '4px' }}>Playback sequence</h4>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {(['default', 'rating', 'shuffle'] as const).map((mode) => {
+                    const labels = {
+                      default: 'Default (Playlist)',
+                      rating: 'Best to Worst',
+                      shuffle: 'Shuffle'
+                    }
+                    return (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setSettings((prev) => ({ ...prev, playSequence: mode }))}
+                        style={{
+                          flex: 1,
+                          padding: '6px 8px',
+                          fontSize: '0.8rem',
+                          background: (settings.playSequence ?? 'default') === mode ? '#00b06b' : 'rgba(255,255,255,0.1)',
+                          color: '#fff',
+                          border: '1px solid rgba(255,255,255,0.15)',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          fontWeight: (settings.playSequence ?? 'default') === mode ? 'bold' : 'normal'
+                        }}
+                      >
+                        {(settings.playSequence ?? 'default') === mode ? '✓ ' : ''}{labels[mode]}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
               <div className="row compact" style={{ margin: 0 }}>
                 <label className="check">
                   <input
@@ -2423,18 +2486,18 @@ function App() {
           </details>
 
           {/* ── Upcoming queue ── */}
-          {playlist.entries.length > 0 && (
+          {playableEntries.length > 0 && (
             <>
               <h3 className="upcoming-heading">
                 Up next
                 {currentIndex >= 0 && (
                   <span className="upcoming-progress">
-                    {currentIndex + 1} / {playlist.entries.length}
+                    {currentIndex + 1} / {playableEntries.length}
                   </span>
                 )}
               </h3>
               <div className="player-queue-list">
-                {playlist.entries.map((entry, index) => {
+                {playableEntries.map((entry, index) => {
                   const isActive = entry.id === activeEntryId
                   const isPast = currentIndex >= 0 && index < currentIndex
                   if (entry.type === 'break') {
