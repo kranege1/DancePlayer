@@ -595,40 +595,44 @@ function App() {
       let initialRating = 0
       try {
         const metadata = await mm.parseBlob(file)
-        const ratings = metadata.common.rating
-        if (ratings && ratings.length > 0) {
-          const r = ratings[0].rating
-          if (r > 1) {
-            initialRating = Math.round((r / 255) * 5)
-          } else {
-            initialRating = Math.round(r * 5)
+        let popmFound = false
+
+        // 1. Prioritize native ID3v2 structures for POPM frame (desktop helper app values)
+        const nativeFormats = ['ID3v2.3', 'ID3v2.4', 'ID3v2.2']
+        for (const format of nativeFormats) {
+          const tags = metadata.native[format]
+          if (tags) {
+            const popmTag = tags.find(t => t.id === 'POPM')
+            if (popmTag && popmTag.value) {
+              let rawRating = 0
+              if (typeof popmTag.value === 'object' && popmTag.value !== null) {
+                rawRating = (popmTag.value as any).rating ?? 0
+              } else if (typeof popmTag.value === 'number') {
+                rawRating = popmTag.value
+              }
+
+              if (rawRating > 0) {
+                if (rawRating <= 63) initialRating = 1
+                else if (rawRating <= 127) initialRating = 2
+                else if (rawRating <= 195) initialRating = 3
+                else if (rawRating <= 254) initialRating = 4
+                else if (rawRating === 255) initialRating = 5
+                popmFound = true
+                break
+              }
+            }
           }
         }
 
-        // Fallback: Check native ID3v2 structures for POPM frame
-        if (initialRating === 0) {
-          const nativeFormats = ['ID3v2.3', 'ID3v2.4', 'ID3v2.2']
-          for (const format of nativeFormats) {
-            const tags = metadata.native[format]
-            if (tags) {
-              const popmTag = tags.find(t => t.id === 'POPM')
-              if (popmTag && popmTag.value) {
-                let rawRating = 0
-                if (typeof popmTag.value === 'object' && popmTag.value !== null) {
-                  rawRating = (popmTag.value as any).rating ?? 0
-                } else if (typeof popmTag.value === 'number') {
-                  rawRating = popmTag.value
-                }
-
-                if (rawRating > 0) {
-                  if (rawRating <= 63) initialRating = 1
-                  else if (rawRating <= 127) initialRating = 2
-                  else if (rawRating <= 195) initialRating = 3
-                  else if (rawRating <= 254) initialRating = 4
-                  else if (rawRating === 255) initialRating = 5
-                  break
-                }
-              }
+        // 2. Fallback: Check common rating mapping
+        if (!popmFound) {
+          const ratings = metadata.common.rating
+          if (ratings && ratings.length > 0) {
+            const r = ratings[0].rating
+            if (r > 1) {
+              initialRating = Math.round((r / 255) * 5)
+            } else {
+              initialRating = Math.round(r * 5)
             }
           }
         }
