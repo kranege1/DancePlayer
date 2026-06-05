@@ -368,6 +368,8 @@ function App() {
     }
   }, [])
 
+
+
   const tracksById = useMemo(() => {
     return Object.fromEntries(tracks.map((track) => [track.id, track]))
   }, [tracks])
@@ -449,6 +451,87 @@ function App() {
     if (!entry || entry.type !== 'track') return null
     return tracksById[entry.trackId] ?? null
   }, [activeEntryId, playableEntries, tracksById])
+
+  // Media Session API integration
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+
+    if (currentTrack) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentTrack.title,
+        artist: currentTrack.artist || 'DancePlayer',
+        album: currentTrack.danceType,
+        artwork: [
+          { src: danceShapeUrl, sizes: '512x512', type: 'image/png' }
+        ]
+      })
+      navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused'
+    } else {
+      navigator.mediaSession.metadata = null
+      navigator.mediaSession.playbackState = 'none'
+    }
+  }, [currentTrack, isPlaying])
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return
+
+    const handlePlay = () => {
+      const audio = audioRef.current
+      if (audio) void audio.play().catch(() => null)
+    }
+    const handlePause = () => {
+      const audio = audioRef.current
+      if (audio) audio.pause()
+    }
+    const handleNext = () => {
+      nextSong()
+    }
+    const handlePrev = () => {
+      repeatSong()
+    }
+
+    navigator.mediaSession.setActionHandler('play', handlePlay)
+    navigator.mediaSession.setActionHandler('pause', handlePause)
+    navigator.mediaSession.setActionHandler('nexttrack', handleNext)
+    navigator.mediaSession.setActionHandler('previoustrack', handlePrev)
+
+    return () => {
+      navigator.mediaSession.setActionHandler('play', null)
+      navigator.mediaSession.setActionHandler('pause', null)
+      navigator.mediaSession.setActionHandler('nexttrack', null)
+      navigator.mediaSession.setActionHandler('previoustrack', null)
+    }
+  }, [playableEntries, activeEntryId])
+
+  // Keyboard remote control shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeTag = document.activeElement?.tagName.toLowerCase()
+      if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+        return
+      }
+
+      if (e.key === 'Space' || e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault()
+        togglePlayPause()
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        nextSong()
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        repeatSong()
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        seekBy(15)
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        seekBy(-15)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [activeEntryId, playableEntries, isPlaying])
 
   function updateTrack(trackId: string, update: Partial<Track>) {
     setTracks((prev) => prev.map((track) => (track.id === trackId ? { ...track, ...update } : track)))
