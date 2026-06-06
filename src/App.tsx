@@ -208,6 +208,26 @@ function formatTime(s: number): string {
   return `${mins}:${String(secs).padStart(2, '0')}`
 }
 
+function playBeep() {
+  try {
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
+    const osc = audioCtx.createOscillator()
+    const gain = audioCtx.createGain()
+    osc.connect(gain)
+    gain.connect(audioCtx.destination)
+    
+    osc.frequency.setValueAtTime(800, audioCtx.currentTime)
+    gain.gain.setValueAtTime(0, audioCtx.currentTime)
+    gain.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.01)
+    gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.12)
+    
+    osc.start(audioCtx.currentTime)
+    osc.stop(audioCtx.currentTime + 0.12)
+  } catch (err) {
+    console.error('Failed to play calibration beep:', err)
+  }
+}
+
 
 function App() {
   // Load initial persisted state synchronously from localStorage to avoid setting state in useEffect
@@ -263,6 +283,109 @@ function App() {
 
   const [fileMap, setFileMap] = useState<Record<string, File | undefined>>({})
   const [selectedTrackIds, setSelectedTrackIds] = useState<Set<string>>(new Set())
+
+  // Latency calibration state
+  const [isCalibratingLatency, setIsCalibratingLatency] = useState(false)
+  const [calibrationTaps, setCalibrationTaps] = useState<number[]>([])
+  const [calibrationResult, setCalibrationResult] = useState<number | null>(null)
+  const [calibrationFlash, setCalibrationFlash] = useState(false)
+  const calibrationTimerRef = useRef<any>(null)
+  const calibrationBeepsRef = useRef<number[]>([])
+  const calibrationTapsRef = useRef<number[]>([])
+
+  function startCalibration() {
+    setIsCalibratingLatency(true)
+    setCalibrationTaps([])
+    setCalibrationResult(null)
+    calibrationBeepsRef.current = []
+    calibrationTapsRef.current = []
+    if (calibrationTimerRef.current) {
+      clearTimeout(calibrationTimerRef.current)
+    }
+    
+    let beepsPlayed = 0
+    const maxBeeps = 25
+    const interval = 1200
+    
+    const nextBeep = () => {
+      if (calibrationTapsRef.current.length >= 10 || beepsPlayed >= maxBeeps) {
+        setTimeout(() => {
+          calculateCalibrationResult()
+        }, 800)
+        return
+      }
+      
+      playBeep()
+      const now = performance.now()
+      calibrationBeepsRef.current.push(now)
+      beepsPlayed++
+      calibrationTimerRef.current = setTimeout(nextBeep, interval)
+    }
+    
+    calibrationTimerRef.current = setTimeout(nextBeep, 800)
+  }
+
+  function cancelCalibration() {
+    setIsCalibratingLatency(false)
+    if (calibrationTimerRef.current) {
+      clearTimeout(calibrationTimerRef.current)
+      calibrationTimerRef.current = null
+    }
+  }
+
+  function calculateCalibrationResult() {
+    const beeps = calibrationBeepsRef.current
+    const taps = calibrationTapsRef.current
+    const diffs: number[] = []
+    taps.forEach(tap => {
+      let closestBeep = 0
+      let minDiff = Infinity
+      beeps.forEach(beep => {
+        const diff = Math.abs(tap - beep)
+        if (diff < minDiff) {
+          minDiff = diff
+          closestBeep = beep
+        }
+      })
+      if (minDiff < 500) {
+        const delay = tap - closestBeep
+        if (delay > -100 && delay < 500) {
+          diffs.push(delay)
+        }
+      }
+    })
+    
+    if (diffs.length > 0) {
+      const avg = diffs.reduce((a, b) => a + b, 0) / diffs.length
+      const finalLatency = Math.max(0, Math.min(400, Math.round(avg / 10) * 10))
+      setCalibrationResult(finalLatency)
+    } else {
+      setCalibrationResult(0)
+    }
+  }
+
+  const handleCalibrationTap = () => {
+    const now = performance.now()
+    setCalibrationFlash(true)
+    setTimeout(() => setCalibrationFlash(false), 80)
+    setCalibrationTaps(prev => {
+      const next = [...prev, now]
+      calibrationTapsRef.current = next
+      return next
+    })
+  }
+
+  useEffect(() => {
+    if (!isCalibratingLatency) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        e.preventDefault()
+        handleCalibrationTap()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isCalibratingLatency])
 
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null)
   const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>(() => persistedState.dancePlaylists ?? [])
@@ -2755,6 +2878,7 @@ function App() {
                               const isRegistered = currentTrack.beatPairs?.some(
                                 pair => Math.abs(time - pair.t1) < 0.001 || Math.abs(time - pair.t2) < 0.001
                               )
+                              if (!isRegistered) return null
                               return (
                                 <div
                                   key={`beat1-${idx}`}
@@ -2762,12 +2886,12 @@ function App() {
                                     position: 'absolute',
                                     left: `${pct}%`,
                                     bottom: 0,
-                                    height: isRegistered ? '8px' : '4px',
+                                    height: '8px',
                                     width: '1px',
-                                    background: isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.75)',
+                                    background: '#ffd56b',
                                     zIndex: 4
                                   }}
-                                  title={`Beat 1: ${fmtSec(time)}${isRegistered ? ' (Registered Click)' : ''}`}
+                                  title={`Beat 1: ${fmtSec(time)} (Registered Click)`}
                                 />
                               )
                             })}
@@ -3001,6 +3125,7 @@ function App() {
                               const isRegistered = currentTrack.beatPairs?.some(
                                 pair => Math.abs(time - pair.t1) < 0.001 || Math.abs(time - pair.t2) < 0.001
                               )
+                              if (!isRegistered) return null
                               return (
                                 <div
                                   key={`beat1-${idx}`}
@@ -3008,12 +3133,12 @@ function App() {
                                     position: 'absolute',
                                     left: `${pct}%`,
                                     bottom: 0,
-                                    height: isRegistered ? '8px' : '4px',
+                                    height: '8px',
                                     width: '1px',
-                                    background: isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.75)',
+                                    background: '#ffd56b',
                                     zIndex: 4
                                   }}
-                                  title={`Beat 1: ${fmtSec(time)}${isRegistered ? ' (Registered Click)' : ''}`}
+                                  title={`Beat 1: ${fmtSec(time)} (Registered Click)`}
                                 />
                               )
                             })}
@@ -3371,9 +3496,30 @@ function App() {
                     />
                     <span style={{ fontSize: '0.85rem', minWidth: '60px', textAlign: 'right' }}>{settings.tapLatencyMs ?? 100} ms</span>
                   </div>
-                  <p style={{ margin: '4px 0 0', fontSize: '0.75rem', color: '#a0b2bd' }}>
-                    Compensates for human reaction delay and audio system latency.
-                  </p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                    <p style={{ margin: 0, fontSize: '0.75rem', color: '#a0b2bd' }}>
+                      Compensates for human reaction delay and audio system latency.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={startCalibration}
+                      style={{
+                        background: 'rgba(255, 112, 67, 0.15)',
+                        border: '1px solid #ff7043',
+                        color: '#ff7043',
+                        borderRadius: '4px',
+                        padding: '3px 8px',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        transition: 'background 0.2s'
+                      }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 112, 67, 0.25)'}
+                      onMouseLeave={(e) => e.currentTarget.style.background = 'rgba(255, 112, 67, 0.15)'}
+                    >
+                      ⚡ Calibrate
+                    </button>
+                  </div>
                 </div>
 
                 {/* Break between tracks */}
@@ -4311,6 +4457,101 @@ function App() {
                 }}
               >
                 ⏭ End
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isCalibratingLatency && (
+        <div className="edit-modal-overlay" style={{ zIndex: 1200 }} onClick={cancelCalibration}>
+          <div className="edit-modal" style={{ background: '#0b1f2a', color: '#fff9ef', border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 12px', fontSize: '1.2rem', color: '#ffd56b' }}>⚡ Latency Calibration</h3>
+            
+            <p style={{ fontSize: '0.9rem', color: '#a0b2bd', lineHeight: '1.4', margin: '0 0 20px' }}>
+              We will play rhythmic clicks. Tap the big button below (or press your <strong>Spacebar</strong>) exactly on each click sound until you have completed 10 taps.
+            </p>
+
+            <div style={{ margin: '20px 0', fontSize: '1.1rem', fontWeight: 'bold' }}>
+              {calibrationResult === null ? (
+                <span>Taps: {calibrationTaps.length} / 10</span>
+              ) : (
+                <span style={{ color: '#4cd8b0' }}>Test Complete!</span>
+              )}
+            </div>
+
+            {calibrationResult === null ? (
+              <button
+                type="button"
+                onClick={handleCalibrationTap}
+                style={{
+                  width: '120px',
+                  height: '120px',
+                  borderRadius: '50%',
+                  background: calibrationFlash ? '#ffd56b' : '#ff7043',
+                  border: 'none',
+                  color: '#fff',
+                  fontSize: '1.2rem',
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                  outline: 'none',
+                  boxShadow: '0 4px 15px rgba(0,0,0,0.3)',
+                  transition: 'background 0.05s, transform 0.05s',
+                  transform: calibrationFlash ? 'scale(0.95)' : 'scale(1)',
+                  margin: '10px auto'
+                }}
+              >
+                TAP!
+              </button>
+            ) : (
+              <div style={{ padding: '12px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', margin: '16px 0' }}>
+                {calibrationResult > 0 ? (
+                  <div>
+                    <div style={{ fontSize: '0.85rem', color: '#a0b2bd' }}>Estimated Latency:</div>
+                    <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#ffd56b', margin: '4px 0' }}>
+                      {calibrationResult} ms
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#a0b2bd' }}>
+                      ({calibrationTaps.length} taps recorded)
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ color: '#ff7043', fontSize: '0.9rem' }}>
+                    No valid taps detected. Make sure to tap exactly when you hear the clicks.
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '10px', marginTop: '24px' }}>
+              {calibrationResult !== null && calibrationResult > 0 && (
+                <button
+                  type="button"
+                  style={{
+                    flex: 1,
+                    background: '#4cd8b0',
+                    color: '#0b1f2a',
+                    border: 'none',
+                    borderRadius: '8px',
+                    padding: '10px',
+                    fontWeight: 'bold',
+                    cursor: 'pointer'
+                  }}
+                  onClick={() => {
+                    setSettings(prev => ({ ...prev, tapLatencyMs: calibrationResult }))
+                    cancelCalibration()
+                  }}
+                >
+                  Apply {calibrationResult} ms
+                </button>
+              )}
+              <button
+                type="button"
+                className="edit-modal-close"
+                style={{ flex: 1, margin: 0, padding: '10px', background: 'rgba(255,255,255,0.1)', color: '#fff' }}
+                onClick={cancelCalibration}
+              >
+                {calibrationResult === null ? 'Cancel' : 'Close'}
               </button>
             </div>
           </div>
