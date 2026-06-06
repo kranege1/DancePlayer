@@ -245,6 +245,7 @@ function App() {
     }
   })
   const [currentWaveform, setCurrentWaveform] = useState<number[] | null>(null)
+  const [zoomWaveform, setZoomWaveform] = useState<number[] | null>(null)
 
   const [tapTimes, setTapTimes] = useState<number[]>([])
   const decodedAudioBufferRef = useRef<AudioBuffer | null>(null)
@@ -573,6 +574,7 @@ function App() {
     setTapTimes([])
     if (!currentTrack) {
       setCurrentWaveform(null)
+      setZoomWaveform(null)
       return
     }
 
@@ -750,13 +752,8 @@ function App() {
       ctx.lineTo(w, h / 2)
       ctx.stroke()
 
-      // Draw high definition waveform from decodedAudioBufferRef
-      const buffer = decodedAudioBufferRef.current
-      if (buffer) {
-        const channelData = buffer.getChannelData(0)
-        const sr = buffer.sampleRate
-        const totalSamples = buffer.length
-
+      // Draw high definition waveform from zoomWaveform
+      if (zoomWaveform) {
         // Render columns
         const colWidth = 2
         const gap = 1
@@ -768,21 +765,14 @@ function App() {
           // Find time at this x coordinate
           const t = tMin + (colX / w) * windowDuration
           if (t >= 0 && t <= duration) {
-            // Sample range of indices
-            const centerIdx = Math.floor(t * sr)
-            const sampleRange = Math.floor((windowDuration / w) * sr * colWidth)
-            const startIdx = Math.max(0, centerIdx - Math.floor(sampleRange / 2))
-            const endIdx = Math.min(totalSamples, centerIdx + Math.ceil(sampleRange / 2))
+            // Interpolate smoothly between adjacent bins to prevent flickering
+            const sampleIdx = (t / duration) * (zoomWaveform.length - 1)
+            const idxL = Math.floor(sampleIdx)
+            const idxR = Math.ceil(sampleIdx)
+            const weight = sampleIdx - idxL
+            const val = (1 - weight) * (zoomWaveform[idxL] || 0) + weight * (zoomWaveform[idxR] || 0)
 
-            let maxVal = 0
-            for (let j = startIdx; j < endIdx; j += Math.max(1, Math.floor(sampleRange / 20))) {
-              const val = Math.abs(channelData[j])
-              if (val > maxVal) maxVal = val
-            }
-
-            // Apply scaling/compression for nice aesthetics
-            const heightFactor = Math.pow(maxVal, 1.2)
-            const barH = heightFactor * (h - 20)
+            const barH = val * (h - 20)
             const y = (h - barH) / 2
             
             // Draw active/inactive color based on if it's past cur
@@ -1705,14 +1695,16 @@ function App() {
   async function loadWaveform(file: File) {
     try {
       setCurrentWaveform(null)
+      setZoomWaveform(null)
       decodedAudioBufferRef.current = null
       const arrayBuffer = await file.arrayBuffer()
       const offlineCtx = new OfflineAudioContext(1, 44100, 44100)
       const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer)
       decodedAudioBufferRef.current = audioBuffer
       
-      // 1. Normal Waveform
       const rawData = audioBuffer.getChannelData(0)
+
+      // 1. Normal Waveform (180 samples)
       const samples = 180
       const blockSize = Math.floor(rawData.length / samples)
       const peaks: number[] = []
@@ -1728,9 +1720,27 @@ function App() {
       const max = Math.max(...peaks)
       const normalized = peaks.map(p => max > 0 ? Math.pow(p / max, 1.8) : 0)
       setCurrentWaveform(normalized)
+
+      // 2. High Resolution Zoom Waveform (4000 samples)
+      const zoomSamples = 4000
+      const zoomBlockSize = Math.floor(rawData.length / zoomSamples)
+      const zoomPeaks: number[] = []
+      for (let i = 0; i < zoomSamples; i++) {
+        let blockStart = zoomBlockSize * i
+        let sum = 0
+        const limit = Math.min(blockStart + zoomBlockSize, rawData.length)
+        for (let j = blockStart; j < limit; j++) {
+          sum += Math.abs(rawData[j])
+        }
+        zoomPeaks.push(sum / (limit - blockStart || 1))
+      }
+      const zoomMax = Math.max(...zoomPeaks)
+      const zoomNormalized = zoomPeaks.map(p => zoomMax > 0 ? Math.pow(p / zoomMax, 1.8) : 0)
+      setZoomWaveform(zoomNormalized)
     } catch (err) {
       console.error('Failed to generate waveform:', err)
       setCurrentWaveform(null)
+      setZoomWaveform(null)
       decodedAudioBufferRef.current = null
     }
   }
