@@ -5,6 +5,7 @@ import {
   DANCES,
   DANCE_CATEGORIES,
   WDSF_2025_DEFAULT_PLAYTIMES,
+  WDSF_2025_BPM_RANGES,
   type AppSettings,
   type DanceType,
   type Playlist,
@@ -62,6 +63,7 @@ const initialSettings: AppSettings = {
   language: 'en',
   playSequence: 'default',
   repeatPlaylist: false,
+  tapLatencyMs: 100,
 }
 
 const initialPlaylist: Playlist = {
@@ -83,8 +85,7 @@ function createId(prefix: string) {
 }
 
 function clampSpeed(value: number) {
-  const rounded = Math.round(value / 10) * 10
-  return Math.max(-50, Math.min(50, rounded))
+  return Math.max(-30, Math.min(30, Math.round(value)))
 }
 
 function sortByTitle(a: Track, b: Track) {
@@ -114,6 +115,20 @@ const DANCE_COLORS: Record<DanceType, string> = {
   Foxtrot: '#2e7d32',
   Quickstep: '#f57c00',
   Other: '#546e7a',
+}
+
+const BEATS_PER_BAR: Record<DanceType, number> = {
+  Samba: 2,
+  ChaCha: 4,
+  Rumba: 4,
+  'Paso Doble': 2,
+  Jive: 4,
+  Waltz: 3,
+  Tango: 4,
+  'Viennese Waltz': 3,
+  Foxtrot: 4,
+  Quickstep: 4,
+  Other: 4,
 }
 
 const DANCE_ABBR: Record<DanceType, string> = {
@@ -193,6 +208,7 @@ function formatTime(s: number): string {
   return `${mins}:${String(secs).padStart(2, '0')}`
 }
 
+
 function App() {
   // Load initial persisted state synchronously from localStorage to avoid setting state in useEffect
   const persistedState = useMemo((): Partial<PersistedState> => {
@@ -229,6 +245,9 @@ function App() {
     }
   })
   const [currentWaveform, setCurrentWaveform] = useState<number[] | null>(null)
+
+  const [tapTimes, setTapTimes] = useState<number[]>([])
+  const decodedAudioBufferRef = useRef<AudioBuffer | null>(null)
   const [dancePlaylistSorts, setDancePlaylistSorts] = useState<Record<string, 'name' | 'stars'>>(() => persistedState.dancePlaylistSorts ?? {})
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null)
   const [breakSecondsLeft, setBreakSecondsLeft] = useState<number | null>(null)
@@ -335,6 +354,8 @@ function App() {
     return Object.fromEntries(tracks.map((track) => [track.id, track]))
   }, [tracks])
 
+
+
   // IDs of tracks already placed into dance playlists — they leave the Songs staging area
   const distributedTrackIds = useMemo(() => {
     const ids = new Set<string>()
@@ -413,6 +434,54 @@ function App() {
     return tracksById[entry.trackId] ?? null
   }, [activeEntryId, playableEntries, tracksById])
 
+  // Derived state: calculate current beat number if playing and aligned
+  const currentBeatNum = useMemo(() => {
+    if (!currentTrack || currentTrack.beat1Phase === undefined || currentTrack.beat1Interval === undefined || currentTrack.beat1Interval <= 0) {
+      return null
+    }
+    const phase = currentTrack.beat1Phase
+    const interval = currentTrack.beat1Interval
+    const cur = mainCurrentTime || 0
+    const beatsPerBar = BEATS_PER_BAR[currentTrack.danceType] || 4
+    const beatDuration = interval / beatsPerBar
+    const elapsed = cur - phase
+    let num = 1
+    if (elapsed >= 0) {
+      const barIndex = Math.floor(elapsed / interval)
+      const timeInBar = elapsed - barIndex * interval
+      num = Math.floor(timeInBar / beatDuration) + 1
+      if (num > beatsPerBar) num = beatsPerBar
+    } else {
+      const elapsedAbs = Math.abs(elapsed)
+      const barIndex = Math.ceil(elapsedAbs / interval)
+      const projectedStart = phase - barIndex * interval
+      num = Math.floor((cur - projectedStart) / beatDuration) + 1
+      if (num > beatsPerBar) num = beatsPerBar
+    }
+    return num < 1 ? 1 : num
+  }, [currentTrack, mainCurrentTime])
+
+  const beat1Times = useMemo(() => {
+    if (!currentTrack || currentTrack.beat1Phase === undefined || currentTrack.beat1Interval === undefined || currentTrack.beat1Interval <= 0) {
+      return []
+    }
+    const phase = currentTrack.beat1Phase
+    const interval = currentTrack.beat1Interval
+    const dur = mainDuration || currentTrack.durationSec || 120
+    const list: number[] = []
+    let t = phase
+    while (t < dur) {
+      list.push(t)
+      t += interval
+    }
+    let tBack = phase - interval
+    while (tBack >= 0) {
+      list.unshift(tBack)
+      tBack -= interval
+    }
+    return list
+  }, [currentTrack, mainDuration])
+
   // Media Session API integration
   useEffect(() => {
     if (!('mediaSession' in navigator)) return
@@ -434,6 +503,7 @@ function App() {
   }, [currentTrack, isPlaying])
 
   useEffect(() => {
+    setTapTimes([])
     if (!currentTrack) {
       setCurrentWaveform(null)
       return
@@ -1314,9 +1384,13 @@ function App() {
   async function loadWaveform(file: File) {
     try {
       setCurrentWaveform(null)
+      decodedAudioBufferRef.current = null
       const arrayBuffer = await file.arrayBuffer()
       const offlineCtx = new OfflineAudioContext(1, 44100, 44100)
       const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer)
+      decodedAudioBufferRef.current = audioBuffer
+      
+      // 1. Normal Waveform
       const rawData = audioBuffer.getChannelData(0)
       const samples = 180
       const blockSize = Math.floor(rawData.length / samples)
@@ -1336,6 +1410,7 @@ function App() {
     } catch (err) {
       console.error('Failed to generate waveform:', err)
       setCurrentWaveform(null)
+      decodedAudioBufferRef.current = null
     }
   }
 
@@ -1566,6 +1641,88 @@ function App() {
 
   function applySpeedDelta(delta: number) {
     setSettings((prev) => ({ ...prev, speedPct: clampSpeed(prev.speedPct + delta) }))
+  }
+
+  function handleTapBeat1() {
+    const audio = audioRef.current
+    if (!audio || !currentTrack) return
+    const curTime = audio.currentTime
+    const newTaps = [...tapTimes, curTime].sort((a, b) => a - b)
+    setTapTimes(newTaps)
+
+    const latencySec = (settings.tapLatencyMs ?? 100) / 1000
+    const adjustedTaps = newTaps.map(t => t - latencySec)
+
+    if (adjustedTaps.length >= 2) {
+      const minBpm = WDSF_2025_BPM_RANGES[currentTrack.danceType]?.min ?? 20
+      const maxBpm = WDSF_2025_BPM_RANGES[currentTrack.danceType]?.max ?? 200
+      const midBpm = (minBpm + maxBpm) / 2
+      const expectedBarDur = 60 / midBpm
+
+      // Determine bar indices relative to the first tap
+      // Dynamically update the estimated bar duration to handle taps at different stages of the song
+      let currentEstBarDur = expectedBarDur
+      const barIndices = [0]
+      for (let i = 1; i < adjustedTaps.length; i++) {
+        const diff = adjustedTaps[i] - adjustedTaps[i - 1]
+        const numBars = Math.max(1, Math.round(diff / currentEstBarDur))
+        const nextIndex = barIndices[i - 1] + numBars
+        barIndices.push(nextIndex)
+        currentEstBarDur = (adjustedTaps[i] - adjustedTaps[0]) / nextIndex
+      }
+
+      // Perform linear regression: y = slope * x + intercept
+      // y is adjustedTaps, x is barIndices
+      const n = adjustedTaps.length
+      let sumX = 0
+      let sumY = 0
+      for (let i = 0; i < n; i++) {
+        sumX += barIndices[i]
+        sumY += adjustedTaps[i]
+      }
+      const meanX = sumX / n
+      const meanY = sumY / n
+
+      let num = 0
+      let den = 0
+      for (let i = 0; i < n; i++) {
+        num += (barIndices[i] - meanX) * (adjustedTaps[i] - meanY)
+        den += (barIndices[i] - meanX) * (barIndices[i] - meanX)
+      }
+
+      let calculatedInterval = expectedBarDur
+      let calculatedPhase = adjustedTaps[0]
+
+      if (den > 0) {
+        calculatedInterval = num / den
+        calculatedPhase = meanY - calculatedInterval * meanX
+      }
+
+      // Normalize calculatedPhase to be positive and within [0, calculatedInterval)
+      if (calculatedInterval > 0) {
+        calculatedPhase = ((calculatedPhase % calculatedInterval) + calculatedInterval) % calculatedInterval
+      }
+
+      updateTrack(currentTrack.id, {
+        beat1Phase: calculatedPhase,
+        beat1Interval: calculatedInterval
+      })
+
+      const calculatedBpm = Math.round(60 / calculatedInterval)
+      setStatus(`Aligned Beat 1 using ${n} taps! Estimated: ${calculatedBpm} Bars/Min (${Math.round(calculatedBpm * BEATS_PER_BAR[currentTrack.danceType])} BPM).`)
+    } else {
+      setStatus(`Tapped Beat 1 at ${formatTime(curTime)}. Keep tapping to improve timing precision.`)
+    }
+  }
+
+  function handleResetBeats() {
+    if (!currentTrack) return
+    setTapTimes([])
+    updateTrack(currentTrack.id, {
+      beat1Phase: undefined,
+      beat1Interval: undefined
+    })
+    setStatus('Beat alignment reset.')
   }
 
 
@@ -2181,14 +2338,33 @@ function App() {
                   <span className="now-playing-break-badge" style={{ background: '#ffd56b', color: '#17323f' }}>{breakInfo.totalSec}s</span>
                 </div>
               ) : currentTrack ? (
-                <div className="now-playing-strip" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 12px', margin: 0 }}>
+                <div className="now-playing-strip" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 12px', margin: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div className="now-playing-info">
                     <span className="now-playing-title" style={{ color: '#fff' }}>{cleanDisplayTitle(currentTrack.title)}</span>
                     {currentTrack.artist && <span className="now-playing-artist" style={{ color: '#a0b2bd' }}>{currentTrack.artist}</span>}
                   </div>
-                  <span className="dance-badge now-playing-badge" style={{ background: DANCE_COLORS[currentTrack.danceType] }}>
-                    {currentTrack.danceType}
-                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {isPlaying && currentBeatNum !== null && (
+                      <span
+                        key={currentBeatNum}
+                        style={{
+                          background: currentBeatNum === 1 ? '#ff7043' : '#4cd8b0',
+                          color: '#fff',
+                          fontSize: '0.82rem',
+                          fontWeight: 'bold',
+                          padding: '3px 8px',
+                          borderRadius: '6px',
+                          boxShadow: '0 2px 6px rgba(0,0,0,0.25)',
+                          animation: 'beat-pulse 0.15s ease-out'
+                        }}
+                      >
+                        Beat {currentBeatNum}
+                      </span>
+                    )}
+                    <span className="dance-badge now-playing-badge" style={{ background: DANCE_COLORS[currentTrack.danceType], margin: 0 }}>
+                      {currentTrack.danceType}
+                    </span>
+                  </div>
                 </div>
               ) : (
                 <div className="now-playing-strip now-playing-empty" style={{ background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)', color: '#8a9aa3', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '12px' }}>
@@ -2200,6 +2376,9 @@ function App() {
               {currentTrack && (() => {
                 const dur = mainDuration || currentTrack.durationSec || 120
                 const cur = mainCurrentTime || 0
+
+
+
 
                 // Formatting function for MM:SS
                 const fmtSec = (s: number) => {
@@ -2269,6 +2448,24 @@ function App() {
                             })}
                             <div className="cue-marker cue-marker-start" style={{ position: 'absolute', left: `${cuePos}%`, background: '#fff', width: '2px', height: '28px', top: '-2px', zIndex: 5 }} title={`Cue: ${fmtSec(cueStart)}`} />
                             <div className="cue-marker cue-marker-end" style={{ position: 'absolute', left: `${endPos}%`, background: '#fff', width: '2px', height: '28px', top: '-2px', zIndex: 5 }} title={`End: ${fmtSec(limitTime)}`} />
+                            {beat1Times.map((time, idx) => {
+                              const pct = (time / dur) * 100
+                              return (
+                                <div
+                                  key={`beat1-${idx}`}
+                                  style={{
+                                    position: 'absolute',
+                                    left: `${pct}%`,
+                                    bottom: 0,
+                                    height: '4px',
+                                    width: '1px',
+                                    background: 'rgba(255, 255, 255, 0.75)',
+                                    zIndex: 4
+                                  }}
+                                  title={`Beat 1: ${fmtSec(time)}`}
+                                />
+                              )
+                            })}
                           </div>
                         )}
                         <input
@@ -2323,6 +2520,42 @@ function App() {
                         <span>▶ {fmtSec(cur)} / {fmtSec(limitTime)} (Cue: {fmtSec(cueStart)})</span>
                         <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
                       </div>
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                        <button
+                          type="button"
+                          onClick={handleTapBeat1}
+                          style={{
+                            flex: 1,
+                            background: 'linear-gradient(180deg, #ff8a65 0%, #ff7043 100%)',
+                            color: '#fff',
+                            border: '1px solid #e64a19',
+                            borderRadius: '8px',
+                            padding: '6px 12px',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            fontSize: '0.8rem'
+                          }}
+                        >
+                          🥁 Tap Beat 1 ({tapTimes.length} tapped)
+                        </button>
+                        {currentTrack.beat1Phase !== undefined && (
+                          <button
+                            type="button"
+                            onClick={handleResetBeats}
+                            style={{
+                              background: 'rgba(255,255,255,0.1)',
+                              color: '#fff',
+                              border: '1px solid rgba(255,255,255,0.2)',
+                              borderRadius: '8px',
+                              padding: '6px 12px',
+                              cursor: 'pointer',
+                              fontSize: '0.8rem'
+                            }}
+                          >
+                            ✕ Reset
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )
                 } else {
@@ -2368,6 +2601,24 @@ function App() {
                                     borderRadius: '1px',
                                     transition: 'background-color 0.1s'
                                   }}
+                                />
+                              )
+                            })}
+                            {beat1Times.map((time, idx) => {
+                              const pct = (time / dur) * 100
+                              return (
+                                <div
+                                  key={`beat1-${idx}`}
+                                  style={{
+                                    position: 'absolute',
+                                    left: `${pct}%`,
+                                    bottom: 0,
+                                    height: '4px',
+                                    width: '1px',
+                                    background: 'rgba(255, 255, 255, 0.75)',
+                                    zIndex: 4
+                                  }}
+                                  title={`Beat 1: ${fmtSec(time)}`}
                                 />
                               )
                             })}
@@ -2425,6 +2676,42 @@ function App() {
                         <span>▶ {fmtSec(cur)} / {fmtSec(dur)}</span>
                         <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
                       </div>
+                      <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+                        <button
+                          type="button"
+                          onClick={handleTapBeat1}
+                          style={{
+                            flex: 1,
+                            background: 'linear-gradient(180deg, #ff8a65 0%, #ff7043 100%)',
+                            color: '#fff',
+                            border: '1px solid #e64a19',
+                            borderRadius: '8px',
+                            padding: '6px 12px',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            fontSize: '0.8rem'
+                          }}
+                        >
+                          🥁 Tap Beat 1 ({tapTimes.length} tapped)
+                        </button>
+                        {currentTrack.beat1Phase !== undefined && (
+                          <button
+                            type="button"
+                            onClick={handleResetBeats}
+                            style={{
+                              background: 'rgba(255,255,255,0.1)',
+                              color: '#fff',
+                              border: '1px solid rgba(255,255,255,0.2)',
+                              borderRadius: '8px',
+                              padding: '6px 12px',
+                              cursor: 'pointer',
+                              fontSize: '0.8rem'
+                            }}
+                          >
+                            ✕ Reset
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )
                 }
@@ -2462,17 +2749,51 @@ function App() {
 
               {/* Speed row inside card */}
               <div className="player-speed-row" style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0 0' }}>
-                <button type="button" className="ctrl-btn speed-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', padding: '5px 10px' }} onClick={() => applySpeedDelta(-10)}>−10%</button>
-                <input
-                  type="range"
-                  className="speed-slider"
-                  style={{ flex: 1 }}
-                  min={-50}
-                  max={50}
-                  value={settings.speedPct}
-                  onChange={(e) => setSettings((prev) => ({ ...prev, speedPct: clampSpeed(Number(e.target.value)) }))}
-                />
-                <button type="button" className="ctrl-btn speed-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', padding: '5px 10px' }} onClick={() => applySpeedDelta(10)}>+10%</button>
+                <button type="button" className="ctrl-btn speed-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', padding: '5px 10px' }} onClick={() => applySpeedDelta(-1)}>−1%</button>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
+                  <input
+                    type="range"
+                    className="speed-slider"
+                    style={{ width: '100%', margin: 0 }}
+                    min={-30}
+                    max={30}
+                    step={1}
+                    value={settings.speedPct}
+                    onChange={(e) => setSettings((prev) => ({ ...prev, speedPct: Number(e.target.value) }))}
+                  />
+                  {/* Custom Ticks */}
+                  <div style={{ position: 'relative', height: '6px', marginTop: '2px', width: '100%' }}>
+                    {[-30, -25, -20, -15, -10, -5, 0, 5, 10, 15, 20, 25, 30].map((val) => {
+                      const leftPct = ((val + 30) / 60) * 100
+                      const isMajor = val % 10 === 0
+                      return (
+                        <div
+                          key={val}
+                          style={{
+                            position: 'absolute',
+                            left: `${leftPct}%`,
+                            transform: 'translateX(-50%)',
+                            width: '1px',
+                            height: isMajor ? '6px' : '4px',
+                            background: val === 0 ? '#4cd8b0' : 'rgba(255, 255, 255, 0.4)',
+                            top: 0
+                          }}
+                        />
+                      )
+                    })}
+                  </div>
+                  {/* Labels */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '2px', fontSize: '0.62rem', color: '#a0b2bd', padding: '0 2px' }}>
+                    <span>-30%</span>
+                    <span>-20%</span>
+                    <span>-10%</span>
+                    <span style={{ color: '#4cd8b0', fontWeight: 'bold' }}>0%</span>
+                    <span>+10%</span>
+                    <span>+20%</span>
+                    <span>+30%</span>
+                  </div>
+                </div>
+                <button type="button" className="ctrl-btn speed-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', padding: '5px 10px' }} onClick={() => applySpeedDelta(1)}>+1%</button>
                 <span className="speed-label" style={{ color: '#fff9ef', fontSize: '0.85rem', minWidth: '45px', textAlign: 'right' }}>{settings.speedPct > 0 ? '+' : ''}{settings.speedPct}%</span>
               </div>
             </div>
@@ -2551,6 +2872,26 @@ function App() {
                     />
                     <span>🔁 Repeat playlist</span>
                   </label>
+                </div>
+
+                {/* Beat tapping latency */}
+                <div>
+                  <h4 style={{ margin: '0 0 6px', fontSize: '0.9rem', borderBottom: '1px solid rgba(255, 255, 255, 0.15)', paddingBottom: '4px' }}>Beat tapping latency</h4>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <input
+                      type="range"
+                      min={0}
+                      max={400}
+                      step={10}
+                      value={settings.tapLatencyMs ?? 100}
+                      onChange={(e) => setSettings((prev) => ({ ...prev, tapLatencyMs: Number(e.target.value) }))}
+                      style={{ flex: 1, accentColor: '#ff7043', cursor: 'ew-resize' }}
+                    />
+                    <span style={{ fontSize: '0.85rem', minWidth: '60px', textAlign: 'right' }}>{settings.tapLatencyMs ?? 100} ms</span>
+                  </div>
+                  <p style={{ margin: '4px 0 0', fontSize: '0.75rem', color: '#a0b2bd' }}>
+                    Compensates for human reaction delay and audio system latency.
+                  </p>
                 </div>
 
                 {/* Break between tracks */}

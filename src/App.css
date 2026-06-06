@@ -1851,4 +1851,13 @@ button.cta:hover {
   cursor: pointer;
 }
 
+@keyframes beat-pulse {
+  0% {
+    transform: scale(1.18);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 

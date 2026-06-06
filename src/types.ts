@@ -40,6 +40,8 @@ export interface Track {
   fadeOutSec: number
   hash?: string
   removedEarlier?: boolean
+  beat1Phase?: number
+  beat1Interval?: number
 }
 
 export interface BreakItem {
@@ -74,6 +76,7 @@ export interface AppSettings {
   grokApiKey?: string
   playSequence?: 'default' | 'rating' | 'shuffle'
   repeatPlaylist?: boolean
+  tapLatencyMs?: number
 }
 
 export const WDSF_2025_DEFAULT_PLAYTIMES: Record<DanceType, number> = {
