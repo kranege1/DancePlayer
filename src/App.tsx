@@ -268,6 +268,11 @@ function App() {
   const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>(() => persistedState.savedPlaylists ?? [])
   const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('songs')
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null)
+  const [showZoomOverlay, setShowZoomOverlay] = useState(false)
+  const [zoomBarsCount, setZoomBarsCount] = useState(5)
+  const zoomCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const zoomBeatPillRef = useRef<HTMLDivElement | null>(null)
+  const zoomAnimationFrameRef = useRef<number | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const sessionRuleRef = useRef<SessionRule>(initialSessionRule)
   sessionRuleRef.current = sessionRule
@@ -588,6 +593,260 @@ function App() {
       active = false
     }
   }, [currentTrack])
+
+  useEffect(() => {
+    if (!showZoomOverlay || !currentTrack) {
+      if (zoomAnimationFrameRef.current) {
+        cancelAnimationFrame(zoomAnimationFrameRef.current)
+        zoomAnimationFrameRef.current = null
+      }
+      return
+    }
+
+    const draw = () => {
+      const canvas = zoomCanvasRef.current
+      if (!canvas) {
+        zoomAnimationFrameRef.current = requestAnimationFrame(draw)
+        return
+      }
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+
+      const audio = audioRef.current
+      const cur = audio ? audio.currentTime : mainCurrentTime
+      const duration = audio ? audio.duration : (mainDuration || currentTrack.durationSec || 1)
+
+      // Calculate tempo (bar interval) dynamically
+      let barInterval = 2.0 // default fallback
+      if (currentTrack.beatPairs && currentTrack.beatPairs.length > 0) {
+        const intervals = currentTrack.beatPairs.map(p => p.t2 - p.t1)
+        barInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length
+      } else if (currentTrack.bpm) {
+        const bpb = BEATS_PER_BAR[currentTrack.danceType] || 4
+        barInterval = (60 / currentTrack.bpm) * bpb
+      }
+
+      const windowDuration = zoomBarsCount * barInterval
+      const tMin = cur - windowDuration / 2
+      const tMax = cur + windowDuration / 2
+
+      // Setup canvas width / height dynamically if needed (responsive)
+      const rect = canvas.getBoundingClientRect()
+      const dpr = window.devicePixelRatio || 1
+      if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
+        canvas.width = rect.width * dpr
+        canvas.height = rect.height * dpr
+        ctx.scale(dpr, dpr)
+      }
+      const w = rect.width
+      const h = rect.height
+
+      // Clear background
+      ctx.fillStyle = '#0b1f2a'
+      ctx.fillRect(0, 0, w, h)
+
+      // Calculate beat details helper
+      const getBeatInfoAtTime = (t: number) => {
+        if (beat1Times.length === 0) return null
+        const beatsPerBar = BEATS_PER_BAR[currentTrack.danceType] || 4
+
+        let barStart = beat1Times[0]
+        let barEnd = beat1Times[1] ?? (barStart + 2.0)
+        
+        if (t < beat1Times[0]) {
+          const interval = (beat1Times[1] ?? (beat1Times[0] + 2.0)) - beat1Times[0]
+          const elapsed = beat1Times[0] - t
+          const barsBefore = Math.ceil(elapsed / interval)
+          barStart = beat1Times[0] - barsBefore * interval
+          barEnd = barStart + interval
+        } else {
+          let found = false
+          for (let i = 0; i < beat1Times.length - 1; i++) {
+            if (t >= beat1Times[i] && t < beat1Times[i+1]) {
+              barStart = beat1Times[i]
+              barEnd = beat1Times[i+1]
+              found = true
+              break
+            }
+          }
+          if (!found) {
+            const lastIdx = beat1Times.length - 1
+            const interval = beat1Times[lastIdx] - (beat1Times[lastIdx - 1] ?? (beat1Times[lastIdx] - 2.0))
+            const elapsed = t - beat1Times[lastIdx]
+            const barsAfter = Math.floor(elapsed / interval)
+            barStart = beat1Times[lastIdx] + barsAfter * interval
+            barEnd = barStart + interval
+          }
+        }
+
+        const interval = barEnd - barStart
+        const elapsedInBar = t - barStart
+        const beatDuration = interval / beatsPerBar
+        let num = Math.floor(elapsedInBar / beatDuration) + 1
+        if (num > beatsPerBar) num = beatsPerBar
+        if (num < 1) num = 1
+        return { num, barStart, barEnd, beatDuration, beatsPerBar }
+      }
+
+      // Update the DOM Beat Indicator in perfect sync
+      const activeBeat = getBeatInfoAtTime(cur)
+      if (zoomBeatPillRef.current) {
+        if (activeBeat) {
+          zoomBeatPillRef.current.innerText = `Beat ${activeBeat.num}`
+          if (activeBeat.num === 1) {
+            zoomBeatPillRef.current.className = 'zoom-beat-pill beat-one'
+          } else {
+            zoomBeatPillRef.current.className = 'zoom-beat-pill'
+          }
+          zoomBeatPillRef.current.style.display = 'block'
+        } else {
+          zoomBeatPillRef.current.style.display = 'none'
+        }
+      }
+
+      // Draw colored background beat rectangles
+      if (beat1Times.length > 0) {
+        // Find first bar start prior to tMin
+        let tempT = tMin - barInterval * 2
+        // Limit iterations in case of extremely small tempo errors
+        let limit = 0
+        while (tempT <= tMax && limit < 100) {
+          limit++
+          const info = getBeatInfoAtTime(tempT)
+          if (info) {
+            const { barStart, barEnd, beatDuration, beatsPerBar } = info
+            for (let b = 0; b < beatsPerBar; b++) {
+              const bStart = barStart + b * beatDuration
+              const bEnd = bStart + beatDuration
+              
+              if (bEnd >= tMin && bStart <= tMax) {
+                const x1 = Math.max(0, ((bStart - tMin) / windowDuration) * w)
+                const x2 = Math.min(w, ((bEnd - tMin) / windowDuration) * w)
+                
+                // Color mapping: Beat 1 is soft coral/orange, others are soft green/teal
+                if (b === 0) {
+                  ctx.fillStyle = 'rgba(255, 112, 67, 0.12)'
+                } else if (b % 2 === 1) {
+                  ctx.fillStyle = 'rgba(76, 216, 176, 0.05)'
+                } else {
+                  ctx.fillStyle = 'rgba(76, 216, 176, 0.08)'
+                }
+                ctx.fillRect(x1, 0, x2 - x1, h)
+              }
+            }
+            // Move to next bar
+            tempT = barEnd + 0.01
+          } else {
+            tempT += barInterval
+          }
+        }
+      }
+
+      // Draw horizontal baseline
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.moveTo(0, h / 2)
+      ctx.lineTo(w, h / 2)
+      ctx.stroke()
+
+      // Draw high definition waveform from decodedAudioBufferRef
+      const buffer = decodedAudioBufferRef.current
+      if (buffer) {
+        const channelData = buffer.getChannelData(0)
+        const sr = buffer.sampleRate
+        const totalSamples = buffer.length
+
+        // Render columns
+        const colWidth = 2
+        const gap = 1
+        const step = colWidth + gap
+        const numCols = Math.ceil(w / step)
+
+        for (let col = 0; col < numCols; col++) {
+          const colX = col * step
+          // Find time at this x coordinate
+          const t = tMin + (colX / w) * windowDuration
+          if (t >= 0 && t <= duration) {
+            // Sample range of indices
+            const centerIdx = Math.floor(t * sr)
+            const sampleRange = Math.floor((windowDuration / w) * sr * colWidth)
+            const startIdx = Math.max(0, centerIdx - Math.floor(sampleRange / 2))
+            const endIdx = Math.min(totalSamples, centerIdx + Math.ceil(sampleRange / 2))
+
+            let maxVal = 0
+            for (let j = startIdx; j < endIdx; j += Math.max(1, Math.floor(sampleRange / 20))) {
+              const val = Math.abs(channelData[j])
+              if (val > maxVal) maxVal = val
+            }
+
+            // Apply scaling/compression for nice aesthetics
+            const heightFactor = Math.pow(maxVal, 1.2)
+            const barH = heightFactor * (h - 20)
+            const y = (h - barH) / 2
+            
+            // Draw active/inactive color based on if it's past cur
+            if (t <= cur) {
+              ctx.fillStyle = '#4cd8b0' // active
+            } else {
+              ctx.fillStyle = 'rgba(76, 216, 176, 0.35)' // preview/inactive
+            }
+            ctx.fillRect(colX, y, colWidth, barH)
+          }
+        }
+      }
+
+      // Draw Beat 1 grid lines
+      beat1Times.forEach((time) => {
+        if (time >= tMin && time <= tMax) {
+          const x = ((time - tMin) / windowDuration) * w
+          const isRegistered = currentTrack.beatPairs?.some(
+            pair => Math.abs(time - pair.t1) < 0.001 || Math.abs(time - pair.t2) < 0.001
+          )
+
+          ctx.strokeStyle = isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.4)'
+          ctx.lineWidth = isRegistered ? 2 : 1
+          ctx.beginPath()
+          ctx.moveTo(x, 0)
+          ctx.lineTo(x, h)
+          ctx.stroke()
+
+          // Draw small text label for the beat
+          ctx.fillStyle = isRegistered ? '#ffd56b' : '#a0b2bd'
+          ctx.font = '9px sans-serif'
+          ctx.fillText(`Beat 1`, x + 4, 15)
+        }
+      })
+
+      // Draw Center Playhead line
+      ctx.strokeStyle = '#ff7043'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.moveTo(w / 2, 0)
+      ctx.lineTo(w / 2, h)
+      ctx.stroke()
+
+      // Small playhead marker triangle at top
+      ctx.fillStyle = '#ff7043'
+      ctx.beginPath()
+      ctx.moveTo(w / 2 - 6, 0)
+      ctx.lineTo(w / 2 + 6, 0)
+      ctx.lineTo(w / 2, 8)
+      ctx.closePath()
+      ctx.fill()
+
+      zoomAnimationFrameRef.current = requestAnimationFrame(draw)
+    }
+
+    zoomAnimationFrameRef.current = requestAnimationFrame(draw)
+
+    return () => {
+      if (zoomAnimationFrameRef.current) {
+        cancelAnimationFrame(zoomAnimationFrameRef.current)
+        zoomAnimationFrameRef.current = null
+      }
+    }
+  }, [showZoomOverlay, currentTrack, beat1Times, zoomBarsCount, mainCurrentTime, mainDuration])
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return
@@ -2099,7 +2358,12 @@ function App() {
                       <span className="qe-num">{idx + 1}</span>
                       <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>{DANCE_ABBR[t.danceType]}</span>
                       <span className="qe-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                        <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
+                        <span className="qe-title" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          {cleanDisplayTitle(t.title)}
+                          {t.beatPairs && t.beatPairs.length > 0 && (
+                            <span title="Beat alignment grid added" style={{ fontSize: '0.85rem', color: '#ff7043', cursor: 'default' }}>🥁</span>
+                          )}
+                        </span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.8rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
                             {[1, 2, 3, 4, 5].map((star) => {
@@ -2215,7 +2479,12 @@ function App() {
                               <span className="qe-num">{idx + 1}</span>
                               <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>{DANCE_ABBR[t.danceType]}</span>
                               <span className="qe-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
+                                <span className="qe-title" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                  {cleanDisplayTitle(t.title)}
+                                  {t.beatPairs && t.beatPairs.length > 0 && (
+                                    <span title="Beat alignment grid added" style={{ fontSize: '0.85rem', color: '#ff7043', cursor: 'default' }}>🥁</span>
+                                  )}
+                                </span>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                   <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.8rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
                                     {[1, 2, 3, 4, 5].map((star) => {
@@ -2358,7 +2627,12 @@ function App() {
               ) : currentTrack ? (
                 <div className="now-playing-strip" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 12px', margin: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div className="now-playing-info">
-                    <span className="now-playing-title" style={{ color: '#fff' }}>{cleanDisplayTitle(currentTrack.title)}</span>
+                    <span className="now-playing-title" style={{ color: '#fff', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                      {cleanDisplayTitle(currentTrack.title)}
+                      {currentTrack.beatPairs && currentTrack.beatPairs.length > 0 && (
+                        <span title="Beat alignment grid added" style={{ fontSize: '0.85rem', color: '#ff7043', cursor: 'default' }}>🥁</span>
+                      )}
+                    </span>
                     {currentTrack.artist && <span className="now-playing-artist" style={{ color: '#a0b2bd' }}>{currentTrack.artist}</span>}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -2468,6 +2742,9 @@ function App() {
                             <div className="cue-marker cue-marker-end" style={{ position: 'absolute', left: `${endPos}%`, background: '#fff', width: '2px', height: '28px', top: '-2px', zIndex: 5 }} title={`End: ${fmtSec(limitTime)}`} />
                             {beat1Times.map((time, idx) => {
                               const pct = (time / dur) * 100
+                              const isRegistered = currentTrack.beatPairs?.some(
+                                pair => Math.abs(time - pair.t1) < 0.001 || Math.abs(time - pair.t2) < 0.001
+                              )
                               return (
                                 <div
                                   key={`beat1-${idx}`}
@@ -2475,12 +2752,12 @@ function App() {
                                     position: 'absolute',
                                     left: `${pct}%`,
                                     bottom: 0,
-                                    height: '4px',
+                                    height: isRegistered ? '8px' : '4px',
                                     width: '1px',
-                                    background: 'rgba(255, 255, 255, 0.75)',
+                                    background: isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.75)',
                                     zIndex: 4
                                   }}
-                                  title={`Beat 1: ${fmtSec(time)}`}
+                                  title={`Beat 1: ${fmtSec(time)}${isRegistered ? ' (Registered Click)' : ''}`}
                                 />
                               )
                             })}
@@ -2573,6 +2850,22 @@ function App() {
                             ✕ Reset
                           </button>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => setShowZoomOverlay(true)}
+                          style={{
+                            background: '#1c3d4e',
+                            color: '#ffd56b',
+                            border: '1px solid #ffd56b',
+                            borderRadius: '8px',
+                            padding: '6px 12px',
+                            cursor: 'pointer',
+                            fontSize: '0.8rem',
+                            fontWeight: 'bold'
+                          }}
+                        >
+                          🔍 Zoom View
+                        </button>
                       </div>
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
                         <button
@@ -2695,6 +2988,9 @@ function App() {
                             })}
                             {beat1Times.map((time, idx) => {
                               const pct = (time / dur) * 100
+                              const isRegistered = currentTrack.beatPairs?.some(
+                                pair => Math.abs(time - pair.t1) < 0.001 || Math.abs(time - pair.t2) < 0.001
+                              )
                               return (
                                 <div
                                   key={`beat1-${idx}`}
@@ -2702,12 +2998,12 @@ function App() {
                                     position: 'absolute',
                                     left: `${pct}%`,
                                     bottom: 0,
-                                    height: '4px',
+                                    height: isRegistered ? '8px' : '4px',
                                     width: '1px',
-                                    background: 'rgba(255, 255, 255, 0.75)',
+                                    background: isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.75)',
                                     zIndex: 4
                                   }}
-                                  title={`Beat 1: ${fmtSec(time)}`}
+                                  title={`Beat 1: ${fmtSec(time)}${isRegistered ? ' (Registered Click)' : ''}`}
                                 />
                               )
                             })}
@@ -2800,6 +3096,22 @@ function App() {
                             ✕ Reset
                           </button>
                         )}
+                        <button
+                          type="button"
+                          onClick={() => setShowZoomOverlay(true)}
+                          style={{
+                            background: '#1c3d4e',
+                            color: '#ffd56b',
+                            border: '1px solid #ffd56b',
+                            borderRadius: '8px',
+                            padding: '6px 12px',
+                            cursor: 'pointer',
+                            fontSize: '0.8rem',
+                            fontWeight: 'bold'
+                          }}
+                        >
+                          🔍 Zoom View
+                        </button>
                       </div>
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
                         <button
@@ -3151,7 +3463,12 @@ function App() {
                         </span>
                         <span className="pq-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                           {isActive && <span className="pq-now-playing-label">▶ Now playing</span>}
-                          <span className="pq-title">{cleanDisplayTitle(t.title)}</span>
+                          <span className="pq-title" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            {cleanDisplayTitle(t.title)}
+                            {t.beatPairs && t.beatPairs.length > 0 && (
+                              <span title="Beat alignment grid added" style={{ fontSize: '0.85rem', color: '#ff7043', cursor: 'default' }}>🥁</span>
+                            )}
+                          </span>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.8rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
                               {[1, 2, 3, 4, 5].map((star) => {
@@ -3444,7 +3761,12 @@ function App() {
                                     {idx + 1}
                                   </button>
                                   <div className="dance-track-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                    <span className="dance-track-title">{cleanDisplayTitle(t.title)}</span>
+                                    <span className="dance-track-title" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                                      {cleanDisplayTitle(t.title)}
+                                      {t.beatPairs && t.beatPairs.length > 0 && (
+                                        <span title="Beat alignment grid added" style={{ fontSize: '0.85rem', color: '#ff7043', cursor: 'default' }}>🥁</span>
+                                      )}
+                                    </span>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                       <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.85rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
                                         {[1, 2, 3, 4, 5].map((star) => {
@@ -3875,6 +4197,110 @@ function App() {
                 onClick={() => setShowResetConfirm(false)}
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showZoomOverlay && currentTrack && (
+        <div className="zoom-overlay" onClick={() => setShowZoomOverlay(false)}>
+          <div className="zoom-card" onClick={(e) => e.stopPropagation()}>
+            <header className="zoom-card-header">
+              <div>
+                <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#fff9ef' }}>{cleanDisplayTitle(currentTrack.title)}</h2>
+                <span className="dance-badge" style={{ background: DANCE_COLORS[currentTrack.danceType], marginTop: '4px', display: 'inline-block' }}>
+                  {currentTrack.danceType}
+                </span>
+              </div>
+              <button type="button" className="close-zoom-btn" onClick={() => setShowZoomOverlay(false)}>✕</button>
+            </header>
+
+            <div className="zoom-beat-indicator-container">
+              <div ref={zoomBeatPillRef} className="zoom-beat-pill">
+                Beat -
+              </div>
+            </div>
+
+            <div className="zoom-canvas-container">
+              <canvas ref={zoomCanvasRef} className="zoom-canvas" />
+            </div>
+
+            <div className="zoom-time-label">
+              ▶ {formatTime(mainCurrentTime)} / {formatTime(mainDuration || currentTrack.durationSec)}
+            </div>
+
+            <div className="zoom-slider-row">
+              <label htmlFor="zoom-bars-slider">View Range: <strong>{zoomBarsCount} Bars</strong></label>
+              <input
+                id="zoom-bars-slider"
+                type="range"
+                min="3"
+                max="10"
+                step="1"
+                value={zoomBarsCount}
+                onChange={(e) => setZoomBarsCount(Number(e.target.value))}
+              />
+            </div>
+
+            <div className="zoom-actions-row">
+              <button
+                type="button"
+                className="zoom-tap-btn"
+                onClick={handleTapBeat1}
+              >
+                🥁 Tap Beat 1 ({tapTimes.length} tapped)
+              </button>
+              <button
+                type="button"
+                className="zoom-reset-btn"
+                onClick={() => {
+                  handleResetBeats()
+                }}
+              >
+                ✕ Reset Alignment
+              </button>
+            </div>
+
+            <div className="zoom-nav-row">
+              <button
+                type="button"
+                onClick={() => {
+                  const audio = audioRef.current
+                  if (audio) {
+                    const cue = currentTrack.cueStartSec || 0
+                    audio.currentTime = cue
+                    setMainCurrentTime(cue)
+                  }
+                }}
+              >
+                ⏮ Start
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const audio = audioRef.current
+                  if (audio) {
+                    const mid = (mainDuration || currentTrack.durationSec) * 0.5
+                    audio.currentTime = mid
+                    setMainCurrentTime(mid)
+                  }
+                }}
+              >
+                ⏯ Mid
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const audio = audioRef.current
+                  if (audio) {
+                    const end = (mainDuration || currentTrack.durationSec) * 0.9
+                    audio.currentTime = end
+                    setMainCurrentTime(end)
+                  }
+                }}
+              >
+                ⏭ End
               </button>
             </div>
           </div>
