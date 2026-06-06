@@ -13,47 +13,11 @@ import {
   type Track,
 } from './types'
 import { clearAllAudioFiles, getAudioFile, saveAudioFile, removeAudioFile } from './mediaStore'
-import { parseVoiceIntent } from './voice'
 import { analyzeTrackRhythm } from './analysis'
-import { getFadeWindow, getRepeatThirtyStart } from './playbackMath'
+import { getFadeWindow } from './playbackMath'
 import { lookupTrackOnMusicBrainz } from './musicbrainz'
 import { parseFilenamesWithGrok, type GrokTrackInfo } from './grok'
 import danceShapeUrl from './DanceShape.png'
-
-interface SpeechResultItem {
-  transcript: string
-}
-
-interface SpeechRecognitionEventLike {
-  results: ArrayLike<ArrayLike<SpeechResultItem>>
-}
-
-interface SpeechRecognitionErrorEventLike {
-  error: string
-}
-
-interface SpeechRecognitionLike {
-  lang: string
-  interimResults: boolean
-  continuous: boolean
-  maxAlternatives: number
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null
-  onspeechstart: (() => void) | null
-  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null
-  onend: (() => void) | null
-  start: () => void
-  stop: () => void
-  abort: () => void
-}
-
-type SpeechConstructor = new () => SpeechRecognitionLike
-
-declare global {
-  interface Window {
-    SpeechRecognition?: SpeechConstructor
-    webkitSpeechRecognition?: SpeechConstructor
-  }
-}
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
@@ -68,7 +32,7 @@ function markTrackAsRemoved(hash?: string, filename?: string, title?: string) {
   try {
     const raw = localStorage.getItem(REMOVED_TRACKS_KEY)
     const list: RemovedTrackRecord[] = raw ? JSON.parse(raw) : []
-    const alreadyExists = list.some(item => 
+    const alreadyExists = list.some(item =>
       (hash && item.hash === hash) ||
       (filename && item.filename === filename) ||
       (title && item.title === title)
@@ -97,6 +61,7 @@ const initialSettings: AppSettings = {
   wdsfTimedMode: false,
   language: 'en',
   playSequence: 'default',
+  repeatPlaylist: false,
 }
 
 const initialPlaylist: Playlist = {
@@ -108,7 +73,7 @@ const initialPlaylist: Playlist = {
 const initialSessionRule: SessionRule = {
   danceType: 'Tango',
   autoBreakEnabled: true,
-  breakDurationSec: 30,
+  breakDurationSec: 15,
   breakMode: 'countdown',
   announcementEnabled: false,
 }
@@ -263,10 +228,9 @@ function App() {
       return 'Could not restore saved metadata.'
     }
   })
-  const [isListening, setIsListening] = useState(false)
+  const [currentWaveform, setCurrentWaveform] = useState<number[] | null>(null)
   const [dancePlaylistSorts, setDancePlaylistSorts] = useState<Record<string, 'name' | 'stars'>>(() => persistedState.dancePlaylistSorts ?? {})
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null)
-  const [repeatAnnounce, setRepeatAnnounce] = useState('')
   const [breakSecondsLeft, setBreakSecondsLeft] = useState<number | null>(null)
   const [breakInfo, setBreakInfo] = useState<{ mode: SessionRule['breakMode']; totalSec: number } | null>(null)
   const [trackProgress, setTrackProgress] = useState(0) // 0–1
@@ -286,10 +250,6 @@ function App() {
   const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('songs')
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
-
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
-  // Tracks whether the user *intends* listening to stay on — used for safe auto-restart on iOS
-  const intendedListeningRef = useRef(false)
   const sessionRuleRef = useRef<SessionRule>(initialSessionRule)
   sessionRuleRef.current = sessionRule
   const settingsRef = useRef<AppSettings>(settings)
@@ -308,6 +268,7 @@ function App() {
   const applauseBufferRef = useRef<AudioBuffer | null>(null)
   const trackProgressRef = useRef<number | null>(null)
   const fadeFrameRef = useRef<number | null>(null)
+  const countdownSpeechTimeoutsRef = useRef<number[]>([])
 
   useEffect(() => {
     const payload: PersistedState = { tracks, playlist, dancePlaylists, savedPlaylists, settings, sessionRule, dancePlaylistSorts }
@@ -471,6 +432,30 @@ function App() {
       navigator.mediaSession.playbackState = 'none'
     }
   }, [currentTrack, isPlaying])
+
+  useEffect(() => {
+    if (!currentTrack) {
+      setCurrentWaveform(null)
+      return
+    }
+
+    let active = true
+    async function fetchAndLoad() {
+      let file = fileMap[currentTrack!.id]
+      if (!file) {
+        file = await getAudioFile(currentTrack!.id) ?? undefined
+      }
+      if (file && active) {
+        void loadWaveform(file)
+      }
+    }
+
+    void fetchAndLoad()
+
+    return () => {
+      active = false
+    }
+  }, [currentTrack])
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return
@@ -791,7 +776,7 @@ function App() {
 
       const danceType = finalDanceType
       const fileHash = filesToImportHashes[i]
-      const wasRemovedEarlier = removedList.some(item => 
+      const wasRemovedEarlier = removedList.some(item =>
         (fileHash && item.hash === fileHash) ||
         (item.filename && item.filename === file.name) ||
         (item.title && item.title === finalTitle)
@@ -947,7 +932,7 @@ function App() {
     setPlaylist((prev) => {
       if (toIndex < 0 || toIndex >= prev.entries.length) return prev
       const entries = [...prev.entries]
-      ;[entries[fromIndex], entries[toIndex]] = [entries[toIndex], entries[fromIndex]]
+        ;[entries[fromIndex], entries[toIndex]] = [entries[toIndex], entries[fromIndex]]
       return { ...prev, entries }
     })
   }
@@ -1022,7 +1007,7 @@ function App() {
       if (p.id !== playlistId) return p
       if (toIndex < 0 || toIndex >= p.entries.length) return p
       const entries = [...p.entries]
-      ;[entries[fromIndex], entries[toIndex]] = [entries[toIndex], entries[fromIndex]]
+        ;[entries[fromIndex], entries[toIndex]] = [entries[toIndex], entries[fromIndex]]
       return { ...p, entries }
     }))
   }
@@ -1181,7 +1166,8 @@ function App() {
         if (!timesToSpeak.includes(s)) timesToSpeak.push(s)
       }
       timesToSpeak.forEach((t) => {
-        window.setTimeout(() => { speak(String(t)) }, (dur - t) * 1000)
+        const id = window.setTimeout(() => { speak(String(t)) }, (dur - t) * 1000)
+        countdownSpeechTimeoutsRef.current.push(id)
       })
     }
 
@@ -1314,17 +1300,56 @@ function App() {
     applauseAudioRefs.current.forEach((a) => { a.pause(); a.src = '' })
     applauseAudioRefs.current = []
     if (breakAudioCtxRef.current) { void breakAudioCtxRef.current.close(); breakAudioCtxRef.current = null }
+    // Clear countdown speech timeouts
+    countdownSpeechTimeoutsRef.current.forEach((t) => window.clearTimeout(t))
+    countdownSpeechTimeoutsRef.current = []
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel()
+    }
     setBreakSecondsLeft(null)
     setBreakInfo(null)
     setTrackProgress(0)
+  }
+
+  async function loadWaveform(file: File) {
+    try {
+      setCurrentWaveform(null)
+      const arrayBuffer = await file.arrayBuffer()
+      const offlineCtx = new OfflineAudioContext(1, 44100, 44100)
+      const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer)
+      const rawData = audioBuffer.getChannelData(0)
+      const samples = 180
+      const blockSize = Math.floor(rawData.length / samples)
+      const peaks: number[] = []
+      for (let i = 0; i < samples; i++) {
+        let blockStart = blockSize * i
+        let sum = 0
+        const limit = Math.min(blockStart + blockSize, rawData.length)
+        for (let j = blockStart; j < limit; j++) {
+          sum += Math.abs(rawData[j])
+        }
+        peaks.push(sum / (limit - blockStart || 1))
+      }
+      const max = Math.max(...peaks)
+      const normalized = peaks.map(p => max > 0 ? Math.pow(p / max, 1.8) : 0)
+      setCurrentWaveform(normalized)
+    } catch (err) {
+      console.error('Failed to generate waveform:', err)
+      setCurrentWaveform(null)
+    }
   }
 
   async function playEntryByIndex(index: number) {
     clearPlaybackTimers()
     const entry = playableEntries[index]
     if (!entry) {
-      setActiveEntryId(null)
-      setStatus('Playlist finished.')
+      if (settings.repeatPlaylist && playableEntries.length > 0) {
+        setStatus('Playlist finished. Repeating from start.')
+        void playEntryByIndex(0)
+      } else {
+        setActiveEntryId(null)
+        setStatus('Playlist finished.')
+      }
       return
     }
 
@@ -1362,7 +1387,8 @@ function App() {
         }
         timesToSpeak.forEach((t) => {
           const delay = (dur - t) * 1000
-          window.setTimeout(() => { speak(String(t)) }, delay)
+          const id = window.setTimeout(() => { speak(String(t)) }, delay)
+          countdownSpeechTimeoutsRef.current.push(id)
         })
       }
 
@@ -1406,9 +1432,10 @@ function App() {
       return
     }
 
+    void loadWaveform(file)
+
     if (sessionRuleRef.current.announcementEnabled) {
       const phrase = `Next ${track.danceType}`   // always English
-      setRepeatAnnounce(phrase)
       await speak(phrase) // wait for announcement to finish before starting playback
     }
 
@@ -1520,21 +1547,6 @@ function App() {
     }
   }
 
-  function playNextDance(danceType: DanceType) {
-    const searchStart = Math.max(0, currentIndex + 1)
-    const foundIndex = playableEntries.findIndex((entry, idx) => {
-      if (idx < searchStart || entry.type !== 'track') return false
-      return tracksById[entry.trackId]?.danceType === danceType
-    })
-
-    if (foundIndex >= 0) {
-      void playEntryByIndex(foundIndex)
-      return
-    }
-
-    setStatus(`No ${danceType} track found later in this playlist.`)
-  }
-
   function repeatSong() {
     const audio = audioRef.current
     if (!audio || currentIndex < 0) return
@@ -1544,14 +1556,6 @@ function App() {
     audio.currentTime = track?.cueStartSec ?? 0
     void audio.play()
     setStatus('Repeat current song.')
-  }
-
-  function repeatThirty() {
-    const audio = audioRef.current
-    if (!audio) return
-    audio.currentTime = getRepeatThirtyStart(audio.currentTime)
-    void audio.play()
-    setStatus('Repeated last 30 seconds.')
   }
 
   function seekBy(deltaSec: number) {
@@ -1564,142 +1568,7 @@ function App() {
     setSettings((prev) => ({ ...prev, speedPct: clampSpeed(prev.speedPct + delta) }))
   }
 
-  function executeVoiceCommand(text: string) {
-    const intent = parseVoiceIntent(text)
-    if (intent.type === 'slower') {
-      applySpeedDelta(-10)
-      setStatus('Voice: slower')
-    } else if (intent.type === 'faster') {
-      applySpeedDelta(10)
-      setStatus('Voice: faster')
-    } else if (intent.type === 'nextSong') {
-      nextSong()
-    } else if (intent.type === 'repeatSong') {
-      repeatSong()
-    } else if (intent.type === 'repeat30') {
-      repeatThirty()
-    } else if (intent.type === 'playDance') {
-      playNextDance(intent.danceType)
-    } else {
-      setStatus(`Voice not recognized: ${text}`)
-    }
-  }
 
-  function stopVoiceListening() {
-    intendedListeningRef.current = false
-    try { recognitionRef.current?.abort() } catch { /* ignore */ }
-    recognitionRef.current = null
-    setIsListening(false)
-  }
-
-  function startVoiceRecognition() {
-    const SpeechRecognitionCtor = (window.SpeechRecognition ?? window.webkitSpeechRecognition) as
-      | SpeechConstructor
-      | undefined
-    if (!SpeechRecognitionCtor) return
-
-    // Always cleanly abort any previous instance before creating a new one.
-    // Without this, calling start() on a still-live instance throws InvalidStateError
-    // which crashes the React event handler silently on iOS Safari PWA.
-    try { recognitionRef.current?.abort() } catch { /* ignore */ }
-    recognitionRef.current = null
-
-    const recognition = new SpeechRecognitionCtor()
-    // No lang lock — browser/OS default handles both English and German transcription.
-    recognition.interimResults = false
-    recognition.continuous = true   // mic stays open the whole session
-    recognition.maxAlternatives = 3 // more alternatives → better EN+DE matching
-
-    recognition.onspeechstart = () => {
-      setStatus('Listening… speak now')
-    }
-
-    recognition.onresult = (event) => {
-      // Try all alternatives to find a recognized command (covers EN and DE)
-      for (let r = event.results.length - 1; r >= 0; r--) {
-        const result = event.results[r]
-        for (let a = 0; a < result.length; a++) {
-          const transcript = result[a]?.transcript ?? ''
-          if (!transcript.trim()) continue
-          const intent = parseVoiceIntent(transcript)
-          if (intent.type !== 'unknown') {
-            setStatus(`Voice: "${transcript}"`)
-            executeVoiceCommand(transcript)
-            return
-          }
-        }
-      }
-      // Nothing matched — show what was heard, keep listening
-      const last = event.results[event.results.length - 1]?.[0]?.transcript ?? ''
-      setStatus(`Voice heard: "${last}" — not recognized`)
-    }
-
-    recognition.onerror = (e) => {
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        setStatus('Microphone access denied. Allow microphone permission in iOS Settings → Safari.')
-        intendedListeningRef.current = false
-        setIsListening(false)
-      } else if (e.error === 'no-speech') {
-        // Not a real error — no speech detected in the window; auto-restart below via onend
-        setStatus('Voice: no speech detected, still listening…')
-      } else if (e.error === 'audio-capture') {
-        setStatus('Microphone not available. Another app may be using it.')
-        intendedListeningRef.current = false
-        setIsListening(false)
-      } else {
-        setStatus(`Voice error: ${e.error}`)
-      }
-    }
-
-    recognition.onend = () => {
-      // iOS Safari stops after each utterance even with continuous=true — auto-restart.
-      if (intendedListeningRef.current) {
-        window.setTimeout(() => {
-          if (intendedListeningRef.current) startVoiceRecognition()
-        }, 200)
-      } else {
-        setIsListening(false)
-      }
-    }
-
-    recognitionRef.current = recognition
-    try {
-      recognition.start()
-      setIsListening(true)
-      setStatus('Voice listening active — speak a command')
-    } catch (err) {
-      setStatus(`Could not start voice recognition: ${err instanceof Error ? err.message : String(err)}`)
-      intendedListeningRef.current = false
-      setIsListening(false)
-    }
-  }
-
-  function toggleVoiceListening() {
-    if (!window.isSecureContext) {
-      setStatus(
-        'Voice commands need HTTPS. Run: npm run build && npm run preview -- --host 0.0.0.0, then open https://YOUR_IP:4173 on iPhone, or use a tunnel like Cloudflare Tunnel.',
-      )
-      return
-    }
-
-    const SpeechRecognitionCtor = (window.SpeechRecognition ?? window.webkitSpeechRecognition) as
-      | SpeechConstructor
-      | undefined
-
-    if (!SpeechRecognitionCtor) {
-      setStatus('Speech recognition is unavailable in this browser.')
-      return
-    }
-
-    if (intendedListeningRef.current) {
-      stopVoiceListening()
-      setStatus('Voice listening stopped.')
-      return
-    }
-
-    intendedListeningRef.current = true
-    startVoiceRecognition()
-  }
 
   return (
     <div className="app-shell">
@@ -1709,7 +1578,7 @@ function App() {
           <p className="kicker">DancePlayer PWA</p>
           <h1 style={{ margin: '4px 0 8px' }}>Dance Player</h1>
           <p className="subtitle">
-            Local-first dance playback with smart breaks, pitch control and voice commands.
+            Local-first dance playback with smart breaks and pitch control.
           </p>
         </div>
         <div className="status-row" style={{ width: '100%', margin: '8px 0 0' }}>
@@ -1720,906 +1589,342 @@ function App() {
       <main className="tab-content">
         {/* ── Songs ── */}
         {activeTab === 'songs' && (
-        <section className="panel">
-          <h2>Library</h2>
-          <label className="file-label" htmlFor="music-files">Import music</label>
-          <input id="music-files" type="file" multiple onChange={handleImport} style={{ display: 'none' }} {...{ webkitdirectory: '', mozdirectory: '' } as React.InputHTMLAttributes<HTMLInputElement>} />
+          <section className="panel">
+            <h2>Library</h2>
+            <label className="file-label" htmlFor="music-files">Import music</label>
+            <input id="music-files" type="file" multiple onChange={handleImport} style={{ display: 'none' }} {...{ webkitdirectory: '', mozdirectory: '' } as React.InputHTMLAttributes<HTMLInputElement>} />
 
-          {importProgress && (
-            <div className="import-progress">
-              <div className="progress-bar">
-                <div
-                  className="progress-fill"
-                  style={{ width: `${Math.round((importProgress.done / importProgress.total) * 100)}%` }}
-                />
-              </div>
-              <p className="progress-label">
-                Analysing {importProgress.done} of {importProgress.total}…
-              </p>
-            </div>
-          )}
-
-          {/* Filter + bulk-add toolbar */}
-          {tracks.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '10px 0 6px' }}>
-              <div className="lib-toolbar" style={{ margin: 0 }}>
-                <button type="button" onClick={selectAllFiltered}>
-                  Select all ({visibleTracks.length})
-                </button>
-                <button type="button" onClick={selectHighConfidence}>
-                  High confidence ({visibleTracks.filter((t) => !isLowConfidenceTrack(t)).length})
-                </button>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.06)', padding: '4px 12px', borderRadius: '20px', fontSize: '0.85rem', flexWrap: 'wrap' }}>
-                  <span style={{ opacity: 0.85, fontWeight: 500 }}>Select Rating:</span>
-                  {[5, 4, 3, 2, 1].map((r) => {
-                    const matching = visibleTracks.filter((t) => (t.qualityRating ?? 0) === r)
-                    if (matching.length === 0) return null
-                    const checked = matching.every((t) => selectedTrackIds.has(t.id))
-                    return (
-                      <label key={r} style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', userSelect: 'none', margin: 0 }}>
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => {
-                            setSelectedTrackIds((prev) => {
-                              const next = new Set(prev)
-                              if (checked) {
-                                matching.forEach((t) => next.delete(t.id))
-                              } else {
-                                matching.forEach((t) => next.add(t.id))
-                              }
-                              return next
-                            })
-                          }}
-                          style={{ margin: 0, width: '14px', height: '14px', cursor: 'pointer' }}
-                        />
-                        <span>{r}★ ({matching.length})</span>
-                      </label>
-                    )
-                  })}
+            {importProgress && (
+              <div className="import-progress">
+                <div className="progress-bar">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${Math.round((importProgress.done / importProgress.total) * 100)}%` }}
+                  />
                 </div>
-                {selectedTrackIds.size > 0 && (
-                  <>
-                    <button type="button" className="cta" onClick={addSelectedToPlaylist}>
-                      Add {selectedTrackIds.size} to playlist
-                    </button>
-                    <button type="button" onClick={clearSelection}>
-                      Clear
-                    </button>
-                  </>
-                )}
-                {!importProgress && (
-                  <button type="button" className="cta distribute-btn" onClick={distributeToDancePlaylists}>
-                    {selectedTrackIds.size > 0
-                      ? `Distribute ${selectedTrackIds.size} selected`
-                      : 'Distribute all to dance playlists'}
+                <p className="progress-label">
+                  Analysing {importProgress.done} of {importProgress.total}…
+                </p>
+              </div>
+            )}
+
+            {/* Filter + bulk-add toolbar */}
+            {tracks.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', margin: '10px 0 6px' }}>
+                <div className="lib-toolbar" style={{ margin: 0 }}>
+                  <button type="button" onClick={selectAllFiltered}>
+                    Select all ({visibleTracks.length})
                   </button>
+                  <button type="button" onClick={selectHighConfidence}>
+                    High confidence ({visibleTracks.filter((t) => !isLowConfidenceTrack(t)).length})
+                  </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(255,255,255,0.06)', padding: '4px 12px', borderRadius: '20px', fontSize: '0.85rem', flexWrap: 'wrap' }}>
+                    <span style={{ opacity: 0.85, fontWeight: 500 }}>Select Rating:</span>
+                    {[5, 4, 3, 2, 1].map((r) => {
+                      const matching = visibleTracks.filter((t) => (t.qualityRating ?? 0) === r)
+                      if (matching.length === 0) return null
+                      const checked = matching.every((t) => selectedTrackIds.has(t.id))
+                      return (
+                        <label key={r} style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', userSelect: 'none', margin: 0 }}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              setSelectedTrackIds((prev) => {
+                                const next = new Set(prev)
+                                if (checked) {
+                                  matching.forEach((t) => next.delete(t.id))
+                                } else {
+                                  matching.forEach((t) => next.add(t.id))
+                                }
+                                return next
+                              })
+                            }}
+                            style={{ margin: 0, width: '14px', height: '14px', cursor: 'pointer' }}
+                          />
+                          <span>{r}★ ({matching.length})</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                  {selectedTrackIds.size > 0 && (
+                    <>
+                      <button type="button" className="cta" onClick={addSelectedToPlaylist}>
+                        Add {selectedTrackIds.size} to playlist
+                      </button>
+                      <button type="button" onClick={clearSelection}>
+                        Clear
+                      </button>
+                    </>
+                  )}
+                  {!importProgress && (
+                    <button type="button" className="cta distribute-btn" onClick={distributeToDancePlaylists}>
+                      {selectedTrackIds.size > 0
+                        ? `Distribute ${selectedTrackIds.size} selected`
+                        : 'Distribute all to dance playlists'}
+                    </button>
+                  )}
+                </div>
+
+                {selectedTrackIds.size > 0 && (
+                  <div className="selected-actions-toolbar" style={{ padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                    <h4 style={{ margin: '0 0 8px 0', fontSize: '0.85rem', color: '#a0b2bd', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Selected ({selectedTrackIds.size}) Actions
+                    </h4>
+                    <div className="row compact" style={{ margin: 0, gap: '8px' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          let count = 0
+                          setTracks((prev) => prev.map((tr) => {
+                            if (selectedTrackIds.has(tr.id)) {
+                              const cleaned = cleanStoredTitle(tr.title)
+                              const artistCleaned = tr.artist && /^\d{1,3}$/.test(tr.artist.trim()) ? undefined : tr.artist
+                              if (cleaned !== tr.title || artistCleaned !== tr.artist) { count++ }
+                              return { ...tr, title: cleaned, artist: artistCleaned }
+                            }
+                            return tr
+                          }))
+                          setStatus(`Cleaned titles of ${count} selected track(s).`)
+                        }}
+                      >
+                        ✦ Clean Titles
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!window.confirm(`Reset ratings of ${selectedTrackIds.size} selected song(s) to zero stars?`)) return
+                          setTracks((prev) => prev.map((t) => {
+                            if (selectedTrackIds.has(t.id)) {
+                              return { ...t, qualityRating: 0, rhythmRating: 0 }
+                            }
+                            return t
+                          }))
+                          setStatus(`Reset ratings of ${selectedTrackIds.size} selected track(s).`)
+                        }}
+                      >
+                        ☆ Reset Ratings
+                      </button>
+                      <button type="button" className="btn-danger" onClick={deleteSelectedTracks}>
+                        🗑 Delete
+                      </button>
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const targetDance = e.target.value as DanceType
+                          if (!targetDance) return
+                          setTracks((prev) =>
+                            prev.map((t) =>
+                              selectedTrackIds.has(t.id)
+                                ? { ...t, danceType: targetDance, targetPlaytimeSec: WDSF_2025_DEFAULT_PLAYTIMES[targetDance] }
+                                : t
+                            )
+                          )
+                          setStatus(`Moved ${selectedTrackIds.size} selected track(s) to ${targetDance}.`)
+                        }}
+                        style={{ background: '#1c3d4e', color: '#fff9ef', borderColor: 'rgba(255, 255, 255, 0.2)' }}
+                      >
+                        <option value="" disabled>Move to Dance...</option>
+                        {DANCES.map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                 )}
               </div>
+            )}
 
-              {selectedTrackIds.size > 0 && (
-                <div className="selected-actions-toolbar" style={{ padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.1)' }}>
-                  <h4 style={{ margin: '0 0 8px 0', fontSize: '0.85rem', color: '#a0b2bd', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                    Selected ({selectedTrackIds.size}) Actions
-                  </h4>
-                  <div className="row compact" style={{ margin: 0, gap: '8px' }}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        let count = 0
-                        setTracks((prev) => prev.map((tr) => {
-                          if (selectedTrackIds.has(tr.id)) {
-                            const cleaned = cleanStoredTitle(tr.title)
-                            const artistCleaned = tr.artist && /^\d{1,3}$/.test(tr.artist.trim()) ? undefined : tr.artist
-                            if (cleaned !== tr.title || artistCleaned !== tr.artist) { count++ }
-                            return { ...tr, title: cleaned, artist: artistCleaned }
+            {/* Track list */}
+            {visibleTracks.length === 0 && tracks.length > 0 && (
+              <p className="all-distributed-msg">
+                ✓ All {tracks.length} song{tracks.length !== 1 ? 's' : ''} are in Dance Playlists.{' '}
+                Go to <strong>Playlists</strong> to build your session, or import more songs here.
+              </p>
+            )}
+            <div className="track-list">
+              {visibleTracks.map((track) => (
+                <div
+                  key={track.id}
+                  className={`track-row ${selectedTrackIds.has(track.id) ? 'selected' : ''} ${isLowConfidenceTrack(track) ? 'needs-review' : ''}`}
+                  onClick={() => toggleTrackSelection(track.id)}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedTrackIds.has(track.id)}
+                    onChange={() => toggleTrackSelection(track.id)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <div className="track-info">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span className="track-title">{track.title}</span>
+                      <span className="track-stars" style={{ color: 'var(--sun)', fontSize: '0.95rem', userSelect: 'none', letterSpacing: '0.5px' }}>
+                        {'★'.repeat(track.qualityRating || 0) + '☆'.repeat(5 - (track.qualityRating || 0))}
+                      </span>
+                    </div>
+                    <span className="track-meta">
+                      <select
+                        value={track.danceType}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => {
+                          const danceType = e.target.value as DanceType
+                          updateTrack(track.id, { danceType, targetPlaytimeSec: WDSF_2025_DEFAULT_PLAYTIMES[danceType] })
+                        }}
+                      >
+                        {DANCES.map((d) => (
+                          <option key={d} value={d}>
+                            {d}
+                          </option>
+                        ))}
+                      </select>
+                      {track.removedEarlier ? (
+                        <span className="badge badge-warn" style={{ background: '#b71c1c', color: '#fff' }}>
+                          Removed earlier
+                        </span>
+                      ) : (
+                        <>
+                          {track.analysisConfidence !== undefined && (
+                            <span className={`badge ${track.analysisConfidence >= 0.7 ? 'badge-ok' : 'badge-warn'}`}>
+                              {getConfidenceLabel(track.analysisConfidence)} {Math.round(track.analysisConfidence * 100)}%
+                            </span>
+                          )}
+                          {isLowConfidenceTrack(track) && <span className="badge badge-review">Review</span>}
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className={previewingTrackId === track.id ? 'live' : ''}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void togglePreview(track.id)
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          width: '34px',
+                          height: '34px',
+                          minWidth: '34px',
+                          padding: 0,
+                          borderRadius: '50%',
+                          cursor: 'pointer',
+                          lineHeight: 1,
+                          marginRight: '4px',
+                        }}
+                      >
+                        {previewingTrackId === track.id ? '⏸' : '▶'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          const pa = previewAudioRef.current
+                          if (previewingTrackId === track.id && !pa.paused) {
+                            pa.pause()
+                            if (previewObjectUrlRef.current) {
+                              URL.revokeObjectURL(previewObjectUrlRef.current)
+                              previewObjectUrlRef.current = null
+                            }
+                            setPreviewingTrackId(null)
                           }
-                          return tr
-                        }))
-                        setStatus(`Cleaned titles of ${count} selected track(s).`)
-                      }}
-                    >
-                      ✦ Clean Titles
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!window.confirm(`Reset ratings of ${selectedTrackIds.size} selected song(s) to zero stars?`)) return
-                        setTracks((prev) => prev.map((t) => {
-                          if (selectedTrackIds.has(t.id)) {
-                            return { ...t, qualityRating: 0, rhythmRating: 0 }
-                          }
-                          return t
-                        }))
-                        setStatus(`Reset ratings of ${selectedTrackIds.size} selected track(s).`)
-                      }}
-                    >
-                      ☆ Reset Ratings
-                    </button>
-                    <button type="button" className="btn-danger" onClick={deleteSelectedTracks}>
-                      🗑 Delete
-                    </button>
-                    <select
-                      value=""
-                      onChange={(e) => {
-                        const targetDance = e.target.value as DanceType
-                        if (!targetDance) return
-                        setTracks((prev) =>
-                          prev.map((t) =>
-                            selectedTrackIds.has(t.id)
-                              ? { ...t, danceType: targetDance, targetPlaytimeSec: WDSF_2025_DEFAULT_PLAYTIMES[targetDance] }
-                              : t
-                          )
-                        )
-                        setStatus(`Moved ${selectedTrackIds.size} selected track(s) to ${targetDance}.`)
-                      }}
-                      style={{ background: '#1c3d4e', color: '#fff9ef', borderColor: 'rgba(255, 255, 255, 0.2)' }}
-                    >
-                      <option value="" disabled>Move to Dance...</option>
-                      {DANCES.map((d) => (
-                        <option key={d} value={d}>
-                          {d}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Track list */}
-          {visibleTracks.length === 0 && tracks.length > 0 && (
-            <p className="all-distributed-msg">
-              ✓ All {tracks.length} song{tracks.length !== 1 ? 's' : ''} are in Dance Playlists.{' '}
-              Go to <strong>Playlists</strong> to build your session, or import more songs here.
-            </p>
-          )}
-          <div className="track-list">
-            {visibleTracks.map((track) => (
-              <div
-                key={track.id}
-                className={`track-row ${selectedTrackIds.has(track.id) ? 'selected' : ''} ${isLowConfidenceTrack(track) ? 'needs-review' : ''}`}
-                onClick={() => toggleTrackSelection(track.id)}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedTrackIds.has(track.id)}
-                  onChange={() => toggleTrackSelection(track.id)}
-                  onClick={(e) => e.stopPropagation()}
-                />
-                <div className="track-info">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                    <span className="track-title">{track.title}</span>
-                    <span className="track-stars" style={{ color: 'var(--sun)', fontSize: '0.95rem', userSelect: 'none', letterSpacing: '0.5px' }}>
-                      {'★'.repeat(track.qualityRating || 0) + '☆'.repeat(5 - (track.qualityRating || 0))}
+                          markTrackAsRemoved(track.hash, track.filename, track.title)
+                          void removeAudioFile(track.id)
+                          setTracks((prev) => prev.filter((x) => x.id !== track.id))
+                          setFileMap((prev) => {
+                            const next = { ...prev }
+                            delete next[track.id]
+                            return next
+                          })
+                          setPlaylist((prev) => ({
+                            ...prev,
+                            entries: prev.entries.filter((en) => en.type !== 'track' || en.trackId !== track.id)
+                          }))
+                          setDancePlaylists((prev) => prev.map((p) => ({
+                            ...p,
+                            entries: p.entries.filter((en) => en.type !== 'track' || en.trackId !== track.id)
+                          })))
+                          setSavedPlaylists((prev) => prev.map((p) => ({
+                            ...p,
+                            entries: p.entries.filter((en) => en.type !== 'track' || en.trackId !== track.id)
+                          })))
+                          setStatus(`Deleted "${track.title}" permanently.`)
+                        }}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          width: '34px',
+                          height: '34px',
+                          minWidth: '34px',
+                          padding: 0,
+                          borderRadius: '50%',
+                          cursor: 'pointer',
+                          lineHeight: 1,
+                        }}
+                        title="Delete track"
+                      >
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff5252" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                          <polyline points="3 6 5 6 21 6"></polyline>
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                      </button>
                     </span>
                   </div>
-                  <span className="track-meta">
-                    <select
-                      value={track.danceType}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => {
-                        const danceType = e.target.value as DanceType
-                        updateTrack(track.id, { danceType, targetPlaytimeSec: WDSF_2025_DEFAULT_PLAYTIMES[danceType] })
-                      }}
-                    >
-                      {DANCES.map((d) => (
-                        <option key={d} value={d}>
-                          {d}
-                        </option>
-                      ))}
-                    </select>
-                    {track.removedEarlier ? (
-                      <span className="badge badge-warn" style={{ background: '#b71c1c', color: '#fff' }}>
-                        Removed earlier
-                      </span>
-                    ) : (
-                      <>
-                        {track.analysisConfidence !== undefined && (
-                          <span className={`badge ${track.analysisConfidence >= 0.7 ? 'badge-ok' : 'badge-warn'}`}>
-                            {getConfidenceLabel(track.analysisConfidence)} {Math.round(track.analysisConfidence * 100)}%
-                          </span>
-                        )}
-                        {isLowConfidenceTrack(track) && <span className="badge badge-review">Review</span>}
-                      </>
-                    )}
-                    <button
-                      type="button"
-                      className={previewingTrackId === track.id ? 'live' : ''}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        void togglePreview(track.id)
-                      }}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        width: '34px',
-                        height: '34px',
-                        minWidth: '34px',
-                        padding: 0,
-                        borderRadius: '50%',
-                        cursor: 'pointer',
-                        lineHeight: 1,
-                        marginRight: '4px',
-                      }}
-                    >
-                      {previewingTrackId === track.id ? '⏸' : '▶'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        const pa = previewAudioRef.current
-                        if (previewingTrackId === track.id && !pa.paused) {
-                          pa.pause()
-                          if (previewObjectUrlRef.current) {
-                            URL.revokeObjectURL(previewObjectUrlRef.current)
-                            previewObjectUrlRef.current = null
-                          }
-                          setPreviewingTrackId(null)
-                        }
-                        markTrackAsRemoved(track.hash, track.filename, track.title)
-                        void removeAudioFile(track.id)
-                        setTracks((prev) => prev.filter((x) => x.id !== track.id))
-                        setFileMap((prev) => {
-                          const next = { ...prev }
-                          delete next[track.id]
-                          return next
-                        })
-                        setPlaylist((prev) => ({
-                          ...prev,
-                          entries: prev.entries.filter((en) => en.type !== 'track' || en.trackId !== track.id)
-                        }))
-                        setDancePlaylists((prev) => prev.map((p) => ({
-                          ...p,
-                          entries: p.entries.filter((en) => en.type !== 'track' || en.trackId !== track.id)
-                        })))
-                        setSavedPlaylists((prev) => prev.map((p) => ({
-                          ...p,
-                          entries: p.entries.filter((en) => en.type !== 'track' || en.trackId !== track.id)
-                        })))
-                        setStatus(`Deleted "${track.title}" permanently.`)
-                      }}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        width: '34px',
-                        height: '34px',
-                        minWidth: '34px',
-                        padding: 0,
-                        borderRadius: '50%',
-                        cursor: 'pointer',
-                        lineHeight: 1,
-                      }}
-                      title="Delete track"
-                    >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ff5252" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
-                        <polyline points="3 6 5 6 21 6"></polyline>
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                      </svg>
-                    </button>
-                  </span>
                 </div>
-              </div>
-            ))}
-          </div>
-        </section>
+              ))}
+            </div>
+          </section>
         )}
 
         {/* ── Playlists ── */}
         {activeTab === 'playlists' && (
-        <section className="panel">
-          {/* ── Topbar: name + Save + New ── */}
-          <div className="playlist-topbar">
-            <input
-              className="playlist-name-inline"
-              value={playlist.name}
-              onChange={(e) => renameCurrentPlaylist(e.target.value)}
-              placeholder="Playlist name"
-            />
-            <button type="button" className="cta" onClick={saveCurrentPlaylist}>
-              Save
-            </button>
-          </div>
-
-          {/* ── Current working playlist entries ── */}
-          {playlist.entries.length > 0 && (
-            <div className="current-playlist-entries">
-              {playlist.entries.map((entry, idx) => {
-                if (entry.type === 'break') return (
-                  <div key={entry.id} className="qe-row qe-break">
-                    <span className="qe-num">{idx + 1}</span>
-                    <span className="qe-label">⏸ Break {entry.breakItem.durationSec}s</span>
-                    <div className="qe-actions">
-                      <button type="button" onClick={() => moveCurrentEntry(idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
-                      <button type="button" onClick={() => moveCurrentEntry(idx, 1)} disabled={idx === playlist.entries.length - 1} aria-label="Move down">↓</button>
-                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
-                    </div>
-                  </div>
-                )
-                const t = tracksById[entry.trackId]
-                if (!t) return (
-                  <div key={entry.id} className="qe-row qe-missing">
-                    <span className="qe-num">{idx + 1}</span>
-                    <span className="qe-label">Missing track</span>
-                    <div className="qe-actions">
-                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)}>✕</button>
-                    </div>
-                  </div>
-                )
-                return (
-                  <div key={entry.id} className="qe-row">
-                    <span className="qe-num">{idx + 1}</span>
-                    <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>{DANCE_ABBR[t.danceType]}</span>
-                    <span className="qe-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                      <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.8rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
-                          {[1, 2, 3, 4, 5].map((star) => {
-                            const isFilled = star <= (t.qualityRating ?? 0)
-                            return (
-                              <span
-                                key={star}
-                                onClick={() => {
-                                  const newRating = t.qualityRating === star ? 0 : star
-                                  updateTrack(t.id, { qualityRating: newRating })
-                                }}
-                                style={{
-                                  cursor: 'pointer',
-                                  color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
-                                  padding: '0 1px',
-                                  display: 'inline-block',
-                                }}
-                                title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
-                              >
-                                ★
-                              </span>
-                            )
-                          })}
-                        </div>
-                        {t.artist && <span className="qe-artist" style={{ margin: 0 }}>{t.artist}</span>}
-                      </div>
-                    </span>
-                    <div className="qe-actions">
-                      <button type="button" onClick={() => moveCurrentEntry(idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
-                      <button type="button" onClick={() => moveCurrentEntry(idx, 1)} disabled={idx === playlist.entries.length - 1} aria-label="Move down">↓</button>
-                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
-                    </div>
-                  </div>
-                )
-              })}
-              <p className="hint" style={{ margin: '6px 0 0' }}>
-                {playlist.entries.filter(e => e.type === 'track').length} track(s) — click <strong>Save</strong> to store and clear
-              </p>
-            </div>
-          )}
-
-          {/* ── Saved playlists ── */}
-          {savedPlaylists.length > 0 && (
-            <>
-              <h3 className="saved-playlists-heading">My Playlists</h3>
-              <div className="saved-playlists-list">
-                {savedPlaylists.map((sp) => (
-                  <details key={sp.id} className="saved-playlist-item">
-                    <summary className="saved-playlist-summary">
-                      <input
-                        type="text"
-                        className="saved-playlist-name"
-                        value={sp.name}
-                        onClick={(e) => e.stopPropagation()}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onKeyDown={(e) => {
-                          if (e.key === ' ' || e.key === 'Enter') {
-                            e.stopPropagation()
-                            if (e.key === 'Enter') {
-                              e.currentTarget.blur()
-                            }
-                          }
-                        }}
-                        onChange={(e) => {
-                          const nextName = e.target.value
-                          setSavedPlaylists((prev) =>
-                            prev.map((p) => (p.id === sp.id ? { ...p, name: nextName } : p))
-                          )
-                        }}
-                      />
-                      <span className="saved-playlist-count">{sp.entries.length} entries</span>
-                      <button
-                        type="button"
-                        className="cta saved-playlist-load-btn"
-                        onClick={(e) => { e.preventDefault(); loadSavedPlaylist(sp) }}
-                      >
-                        Load
-                      </button>
-                      <button
-                        type="button"
-                        className="remove-btn"
-                        onClick={(e) => { e.preventDefault(); deleteSavedPlaylist(sp.id) }}
-                        aria-label="Delete saved playlist"
-                      >
-                        ✕
-                      </button>
-                    </summary>
-                    <div className="saved-playlist-entries">
-                      {sp.entries.map((entry, idx) => {
-                        if (entry.type === 'break') return (
-                          <div key={entry.id} className="qe-row qe-break">
-                            <span className="qe-num">{idx + 1}</span>
-                            <span className="qe-label">⏸ Break {entry.breakItem.durationSec}s</span>
-                            <div className="qe-actions">
-                              <button type="button" onClick={() => moveSavedEntry(sp.id, idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
-                              <button type="button" onClick={() => moveSavedEntry(sp.id, idx, 1)} disabled={idx === sp.entries.length - 1} aria-label="Move down">↓</button>
-                              <button type="button" className="remove-btn" onClick={() => removeSavedEntry(sp.id, entry.id)} aria-label="Remove">✕</button>
-                            </div>
-                          </div>
-                        )
-                        const t = tracksById[entry.trackId]
-                        if (!t) return (
-                          <div key={entry.id} className="qe-row qe-missing">
-                            <span className="qe-num">{idx + 1}</span>
-                            <span className="qe-label">Missing</span>
-                            <div className="qe-actions">
-                              <button type="button" className="remove-btn" onClick={() => removeSavedEntry(sp.id, entry.id)}>✕</button>
-                            </div>
-                          </div>
-                        )
-                        return (
-                          <div key={entry.id} className="qe-row">
-                            <span className="qe-num">{idx + 1}</span>
-                            <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>{DANCE_ABBR[t.danceType]}</span>
-                            <span className="qe-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                              <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.8rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
-                                  {[1, 2, 3, 4, 5].map((star) => {
-                                    const isFilled = star <= (t.qualityRating ?? 0)
-                                    return (
-                                      <span
-                                        key={star}
-                                        onClick={() => {
-                                          const newRating = t.qualityRating === star ? 0 : star
-                                          updateTrack(t.id, { qualityRating: newRating })
-                                        }}
-                                        style={{
-                                          cursor: 'pointer',
-                                          color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
-                                          padding: '0 1px',
-                                          display: 'inline-block',
-                                        }}
-                                        title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
-                                      >
-                                        ★
-                                      </span>
-                                    )
-                                  })}
-                                </div>
-                                {t.artist && <span className="qe-artist" style={{ margin: 0 }}>{t.artist}</span>}
-                              </div>
-                            </span>
-                            <div className="qe-actions">
-                              <button type="button" onClick={() => moveSavedEntry(sp.id, idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
-                              <button type="button" onClick={() => moveSavedEntry(sp.id, idx, 1)} disabled={idx === sp.entries.length - 1} aria-label="Move down">↓</button>
-                              <button type="button" className="remove-btn" onClick={() => removeSavedEntry(sp.id, entry.id)} aria-label="Remove">✕</button>
-                            </div>
-                          </div>
-                        )
-                      })}
-                      <button
-                        type="button"
-                        className="cta saved-playlist-update-btn"
-                        onClick={() => {
-                          setSavedPlaylists((prev) => prev.map((p) => p.id === sp.id ? { ...sp } : p))
-                          setStatus(`Saved changes to "${sp.name}".`)
-                        }}
-                      >
-                        Save changes
-                      </button>
-                    </div>
-                  </details>
-                ))}
-              </div>
-            </>
-          )}
-        </section>
-        )}
-
-        {/* ── Player ── */}
-        {activeTab === 'player' && (
-        <section className="panel">
-
-          {/* Playlist pickers: dance dances + other playlists */}
-          <div className="player-playlist-pickers">
-            <select
-              value={dancePlaylists.some((p) => p.id === playlist.id) ? playlist.id : ''}
-              onChange={(e) => {
-                const found = dancePlaylists.find((p) => p.id === e.target.value)
-                if (found) loadSavedPlaylist(found)
-              }}
-              disabled={dancePlaylists.length === 0}
-            >
-              <option value="">Dance…</option>
-              {dancePlaylists.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-            {(() => {
-              const custom = savedPlaylists.filter((sp) => !dancePlaylists.some((dp) => dp.id === sp.id))
-              return (
-                <select
-                  value={custom.some((p) => p.id === playlist.id) ? playlist.id : ''}
-                  onChange={(e) => {
-                    const found = custom.find((p) => p.id === e.target.value)
-                    if (found) loadSavedPlaylist(found)
-                  }}
-                  disabled={custom.length === 0}
-                >
-                  <option value="">My Playlists…</option>
-                  {custom.map((p) => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              )
-            })()}
-          </div>
-
-          <audio
-            ref={audioRef}
-            style={{ display: 'none' }}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            onEnded={() => setIsPlaying(false)}
-            onTimeUpdate={(e) => {
-              setMainCurrentTime(e.currentTarget.currentTime)
-              setMainDuration(e.currentTarget.duration || 0)
-            }}
-            onDurationChange={(e) => {
-              setMainDuration(e.currentTarget.duration || 0)
-            }}
-          />
-
-          {/* Main Now Playing Panel / Card */}
-          <div className="now-playing-card" style={{
-            background: 'linear-gradient(135deg, #0b1f2a 0%, #17323f 100%)',
-            color: '#fff9ef',
-            borderRadius: '16px',
-            padding: '16px',
-            boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-            marginBottom: '16px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '12px'
-          }}>
-            {/* Now-playing strip inside card */}
-            {breakInfo ? (
-              <div className="now-playing-strip now-playing-break" style={{ background: 'rgba(253, 230, 138, 0.15)', borderColor: 'rgba(240, 192, 64, 0.3)', color: '#fff9ef', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 12px', margin: 0 }}>
-                <div className="now-playing-info">
-                  <span className="now-playing-title" style={{ color: '#ffd56b' }}>
-                    {breakInfo.mode === 'applause' ? '👏 Applause break' : breakInfo.mode === 'countdown' ? '⏳ Countdown break' : '🔇 Silence break'}
-                  </span>
-                  <span className="now-playing-artist" style={{ color: '#dbeafe' }}>
-                    {breakSecondsLeft !== null ? `${breakSecondsLeft}s remaining` : '…'}
-                  </span>
-                  <div className="now-playing-breakbar" style={{ background: 'rgba(255,255,255,0.1)' }}>
-                    <div
-                      className="now-playing-breakbar-fill"
-                      style={{ width: `${breakSecondsLeft !== null ? (breakSecondsLeft / breakInfo.totalSec) * 100 : 0}%`, background: '#ffd56b' }}
-                    />
-                  </div>
-                </div>
-                <span className="now-playing-break-badge" style={{ background: '#ffd56b', color: '#17323f' }}>{breakInfo.totalSec}s</span>
-              </div>
-            ) : currentTrack ? (
-              <div className="now-playing-strip" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 12px', margin: 0 }}>
-                <div className="now-playing-info">
-                  <span className="now-playing-title" style={{ color: '#fff' }}>{cleanDisplayTitle(currentTrack.title)}</span>
-                  {currentTrack.artist && <span className="now-playing-artist" style={{ color: '#a0b2bd' }}>{currentTrack.artist}</span>}
-                </div>
-                <span className="dance-badge now-playing-badge" style={{ background: DANCE_COLORS[currentTrack.danceType] }}>
-                  {currentTrack.danceType}
-                </span>
-              </div>
-            ) : (
-              <div className="now-playing-strip now-playing-empty" style={{ background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)', color: '#8a9aa3', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '12px' }}>
-                No track playing
-              </div>
-            )}
-
-            {/* Unified Song Progress Bar */}
-            {currentTrack && (() => {
-              const dur = mainDuration || currentTrack.durationSec || 120
-              const cur = mainCurrentTime || 0
-              
-              // Formatting function for MM:SS
-              const fmtSec = (s: number) => {
-                const mins = Math.floor(Math.max(0, s) / 60)
-                const secs = Math.floor(Math.max(0, s) % 60)
-                return `${mins}:${String(secs).padStart(2, '0')}`
-              }
-
-              if (settings.wdsfTimedMode) {
-                // In timed mode, progress runs from cueStartSec to cueStartSec + targetPlaytimeSec
-                const cueStart = currentTrack.cueStartSec || 0
-                const targetTime = currentTrack.targetPlaytimeSec || 90
-                const limitTime = Math.min(dur, cueStart + targetTime)
-                const timeLeft = Math.max(0, limitTime - cur)
-                
-                // Show the WDSF cue markers inside the bar
-                const cuePos = (cueStart / dur) * 100
-                const endPos = (limitTime / dur) * 100
-                const fullPct = Math.min(100, Math.max(0, (cur / dur) * 100))
-
-                return (
-                  <div className="cue-bar-wrap" style={{ margin: '4px 0 2px' }}>
-                    <div className="cue-bar" style={{ background: 'rgba(255,255,255,0.15)', height: '8px', borderRadius: '4px', position: 'relative' }}>
-                      <div className="cue-bar-active" style={{ position: 'absolute', height: '100%', left: `${cuePos}%`, width: `${endPos - cuePos}%`, background: '#4cd8b0', opacity: 0.3 }} />
-                      <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${fullPct}%`, background: '#4cd8b0', borderRadius: '4px' }} />
-                      <div className="cue-marker cue-marker-start" style={{ position: 'absolute', left: `${cuePos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px' }} title={`Cue: ${fmtSec(cueStart)}`} />
-                      <div className="cue-marker cue-marker-end" style={{ position: 'absolute', left: `${endPos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px' }} title={`End: ${fmtSec(limitTime)}`} />
-                    </div>
-                    <div className="cue-bar-labels" style={{ display: 'flex', justifyContent: 'space-between', color: '#a0b2bd', fontSize: '0.75rem', marginTop: '4px' }}>
-                      <span>▶ {fmtSec(cur)} / {fmtSec(limitTime)} (Cue: {fmtSec(cueStart)})</span>
-                      <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
-                    </div>
-                  </div>
-                )
-              } else {
-                // In untimed mode, progress runs from 0 to dur (full song)
-                const pct = Math.min(100, Math.max(0, (cur / dur) * 100))
-                const timeLeft = Math.max(0, dur - cur)
-
-                return (
-                  <div className="cue-bar-wrap" style={{ margin: '4px 0 2px' }}>
-                    <div className="cue-bar" style={{ background: 'rgba(255,255,255,0.15)', height: '8px', borderRadius: '4px', position: 'relative', overflow: 'hidden' }}>
-                      <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${pct}%`, background: '#4cd8b0' }} />
-                    </div>
-                    <div className="cue-bar-labels" style={{ display: 'flex', justifyContent: 'space-between', color: '#a0b2bd', fontSize: '0.75rem', marginTop: '4px' }}>
-                      <span>▶ {fmtSec(cur)} / {fmtSec(dur)}</span>
-                      <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
-                    </div>
-                  </div>
-                )
-              }
-            })()}
-
-            {/* Custom playback controls inside card */}
-            <div className="player-controls" style={{ display: 'flex', gap: '8px', justifyContent: 'center', margin: '4px 0', flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                className="ctrl-btn main-play-btn"
-                title={isPlaying ? "Pause" : "Play"}
-                onClick={togglePlayPause}
-                style={{
-                  background: isPlaying ? '#00b06b' : '#0c6b69',
-                  color: '#fff',
-                  borderColor: 'rgba(255,255,255,0.15)',
-                  fontSize: '1.1rem',
-                  padding: '8px 20px',
-                  borderRadius: '12px',
-                  flex: '1 1 100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 'bold',
-                  transition: 'background 0.2s'
-                }}
-              >
-                {isPlaying ? '⏸ Pause' : '▶ Play'}
-              </button>
-              <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="Restart track" onClick={repeatSong}>↺ Restart</button>
-              <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="−15 seconds" onClick={() => seekBy(-15)}>-15s</button>
-              <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="+15 seconds" onClick={() => seekBy(15)}>+15s</button>
-              <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="Next track" onClick={nextSong}>⏭ Next</button>
-            </div>
-
-            {/* Speed row inside card */}
-            <div className="player-speed-row" style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0 0' }}>
-              <button type="button" className="ctrl-btn speed-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', padding: '5px 10px' }} onClick={() => applySpeedDelta(-10)}>−10%</button>
+          <section className="panel">
+            {/* ── Topbar: name + Save + New ── */}
+            <div className="playlist-topbar">
               <input
-                type="range"
-                className="speed-slider"
-                style={{ flex: 1 }}
-                min={-50}
-                max={50}
-                value={settings.speedPct}
-                onChange={(e) => setSettings((prev) => ({ ...prev, speedPct: clampSpeed(Number(e.target.value)) }))}
+                className="playlist-name-inline"
+                value={playlist.name}
+                onChange={(e) => renameCurrentPlaylist(e.target.value)}
+                placeholder="Playlist name"
               />
-              <button type="button" className="ctrl-btn speed-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', padding: '5px 10px' }} onClick={() => applySpeedDelta(10)}>+10%</button>
-              <span className="speed-label" style={{ color: '#fff9ef', fontSize: '0.85rem', minWidth: '45px', textAlign: 'right' }}>{settings.speedPct > 0 ? '+' : ''}{settings.speedPct}%</span>
+              <button type="button" className="cta" onClick={saveCurrentPlaylist}>
+                Save
+              </button>
             </div>
-          </div>
 
-          {/* Settings & Automation collapsible card */}
-          <details className="settings-automation-card" style={{
-            background: 'linear-gradient(135deg, #102430 0%, #1c3d4e 100%)',
-            color: '#fff9ef',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            borderRadius: '12px',
-            padding: '12px',
-            marginBottom: '16px'
-          }}>
-            <summary style={{ fontWeight: 'bold', fontSize: '0.95rem', color: '#fff9ef', cursor: 'pointer', outline: 'none', listStyle: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span>⚙ Settings &amp; Automation</span>
-              <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>▼</span>
-            </summary>
-            
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
-              {/* Playback Sequence */}
-              <div>
-                <h4 style={{ margin: '0 0 6px', fontSize: '0.9rem', borderBottom: '1px solid rgba(255, 255, 255, 0.15)', paddingBottom: '4px' }}>Playback sequence</h4>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {(['default', 'rating', 'shuffle'] as const).map((mode) => {
-                    const labels = {
-                      default: 'Default (Playlist)',
-                      rating: 'Best to Worst',
-                      shuffle: 'Shuffle'
-                    }
-                    return (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => setSettings((prev) => ({ ...prev, playSequence: mode }))}
-                        style={{
-                          flex: 1,
-                          padding: '6px 8px',
-                          fontSize: '0.8rem',
-                          background: (settings.playSequence ?? 'default') === mode ? '#00b06b' : 'rgba(255,255,255,0.1)',
-                          color: '#fff',
-                          border: '1px solid rgba(255,255,255,0.15)',
-                          borderRadius: '8px',
-                          cursor: 'pointer',
-                          fontWeight: (settings.playSequence ?? 'default') === mode ? 'bold' : 'normal'
-                        }}
-                      >
-                        {(settings.playSequence ?? 'default') === mode ? '✓ ' : ''}{labels[mode]}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              <div className="row compact" style={{ margin: 0 }}>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={settings.wdsfTimedMode}
-                    onChange={(e) => setSettings((prev) => ({ ...prev, wdsfTimedMode: e.target.checked }))}
-                  />
-                  WDSF timed mode
-                </label>
-                <label className="check">
-                  <input
-                    type="checkbox"
-                    checked={sessionRule.announcementEnabled}
-                    onChange={(e) => setSessionRule((prev) => ({ ...prev, announcementEnabled: e.target.checked }))}
-                  />
-                  Announce next dance
-                </label>
-              </div>
-
-              {/* Break between tracks */}
-              <div>
-                <h4 style={{ margin: '0 0 6px', fontSize: '0.9rem', borderBottom: '1px solid rgba(255, 255, 255, 0.15)', paddingBottom: '4px' }}>Break between tracks</h4>
-                <div className="row compact" style={{ margin: 0 }}>
-                  <label className="check">
-                    <input
-                      type="checkbox"
-                      checked={sessionRule.autoBreakEnabled}
-                      onChange={(e) => setSessionRule((prev) => ({ ...prev, autoBreakEnabled: e.target.checked }))}
-                    />
-                    Enable break
-                  </label>
-                </div>
-                {sessionRule.autoBreakEnabled && (
-                  <div className="row compact break-settings-row" style={{ marginTop: '8px', marginBottom: 0 }}>
-                    <label style={{ color: '#fff9ef' }}>
-                      Duration
-                      <select
-                        value={sessionRule.breakDurationSec}
-                        onChange={(e) => setSessionRule((prev) => ({ ...prev, breakDurationSec: Number(e.target.value) }))}
-                        style={{ background: '#1c3d4e', color: '#fff9ef', borderColor: 'rgba(255, 255, 255, 0.2)' }}
-                      >
-                        {Array.from({ length: 24 }, (_, i) => (i + 1) * 5).map((s) => (
-                          <option key={s} value={s}>{s}s</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label style={{ color: '#fff9ef' }}>
-                      Mode
-                      <select
-                        value={sessionRule.breakMode ?? 'countdown'}
-                        onChange={(e) => setSessionRule((prev) => ({ ...prev, breakMode: e.target.value as SessionRule['breakMode'] }))}
-                        style={{ background: '#1c3d4e', color: '#fff9ef', borderColor: 'rgba(255, 255, 255, 0.2)' }}
-                      >
-                        <option value="silence">Silence</option>
-                        <option value="countdown">Countdown</option>
-                        <option value="applause">Applause</option>
-                      </select>
-                    </label>
-                  </div>
-                )}
-              </div>
-
-              {/* Voice commands */}
-              <div>
-                <h4 style={{ margin: '0 0 6px', fontSize: '0.9rem', borderBottom: '1px solid rgba(255, 255, 255, 0.15)', paddingBottom: '4px' }}>Voice commands</h4>
-                {!window.isSecureContext && (
-                  <div className="https-warning" style={{ background: '#3b2f0f', borderColor: '#e6b84a', color: '#ffd073' }}>
-                    Voice requires HTTPS.
-                  </div>
-                )}
-                <div className="row compact" style={{ margin: 0 }}>
-                  <button
-                    type="button"
-                    className={isListening ? 'live' : ''}
-                    onClick={toggleVoiceListening}
-                    style={{ background: isListening ? '#00b06b' : 'rgba(255, 255, 255, 0.1)', color: '#fff', borderColor: isListening ? '#006e41' : 'rgba(255,255,255,0.15)' }}
-                  >
-                    {isListening ? '🎙 Listening…' : '🎙 Voice Command'}
-                  </button>
-                </div>
-                <p className="hint" style={{ marginTop: '6px', color: '#a0b2bd' }}>
-                  Commands (EN+DE): slower/langsamer · faster/schneller · next song/nächstes Lied · repeat/wiederholen · play {'<dance>'}/spiele {'<dance>'}
-                </p>
-                {repeatAnnounce && <p className="hint" style={{ marginTop: '4px', color: '#a0b2bd' }}>Last announcement: {repeatAnnounce}</p>}
-              </div>
-            </div>
-          </details>
-
-          {/* ── Upcoming queue ── */}
-          {playableEntries.length > 0 && (
-            <>
-              <h3 className="upcoming-heading">
-                Up next
-                {currentIndex >= 0 && (
-                  <span className="upcoming-progress">
-                    {currentIndex + 1} / {playableEntries.length}
-                  </span>
-                )}
-              </h3>
-              <div className="player-queue-list">
-                {playableEntries.map((entry, index) => {
-                  const isActive = entry.id === activeEntryId
-                  const isPast = currentIndex >= 0 && index < currentIndex
-                  if (entry.type === 'break') {
-                    return (
-                      <div
-                        key={entry.id}
-                        className={`pq-row pq-break${isActive ? ' pq-active' : ''}${isPast ? ' pq-past' : ''}`}
-                      >
-                        <span className="pq-num">{index + 1}</span>
-                        <span className="pq-label">⏸ Break {entry.breakItem.durationSec}s ({entry.breakItem.mode})</span>
-                        <button
-                          type="button" className="remove-btn"
-                          onClick={() => removePlaylistEntry(entry.id)}
-                          aria-label="Remove"
-                        >✕</button>
+            {/* ── Current working playlist entries ── */}
+            {playlist.entries.length > 0 && (
+              <div className="current-playlist-entries">
+                {playlist.entries.map((entry, idx) => {
+                  if (entry.type === 'break') return (
+                    <div key={entry.id} className="qe-row qe-break">
+                      <span className="qe-num">{idx + 1}</span>
+                      <span className="qe-label">⏸ Break {entry.breakItem.durationSec}s</span>
+                      <div className="qe-actions">
+                        <button type="button" onClick={() => moveCurrentEntry(idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
+                        <button type="button" onClick={() => moveCurrentEntry(idx, 1)} disabled={idx === playlist.entries.length - 1} aria-label="Move down">↓</button>
+                        <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
                       </div>
-                    )
-                  }
+                    </div>
+                  )
                   const t = tracksById[entry.trackId]
                   if (!t) return (
-                    <div key={entry.id} className="pq-row pq-missing">
-                      <span className="pq-num">{index + 1}</span>
-                      <span className="pq-label">Missing track</span>
-                      <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
+                    <div key={entry.id} className="qe-row qe-missing">
+                      <span className="qe-num">{idx + 1}</span>
+                      <span className="qe-label">Missing track</span>
+                      <div className="qe-actions">
+                        <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)}>✕</button>
+                      </div>
                     </div>
                   )
                   return (
-                    <div
-                      key={entry.id}
-                      className={`pq-row${isActive ? ' pq-active' : ''}${isPast ? ' pq-past' : ''}`}
-                      onClick={() => void playEntryByIndex(index)}
-                    >
-                      <span className="pq-num">{index + 1}</span>
-                      <span className="dance-badge pq-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>
-                        {DANCE_ABBR[t.danceType]}
-                      </span>
-                      <span className="pq-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                        {isActive && <span className="pq-now-playing-label">▶ Now playing</span>}
-                        <span className="pq-title">{cleanDisplayTitle(t.title)}</span>
+                    <div key={entry.id} className="qe-row">
+                      <span className="qe-num">{idx + 1}</span>
+                      <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>{DANCE_ABBR[t.danceType]}</span>
+                      <span className="qe-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                        <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.8rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
                             {[1, 2, 3, 4, 5].map((star) => {
@@ -2644,125 +1949,851 @@ function App() {
                               )
                             })}
                           </div>
-                          {t.artist && <span className="pq-artist" style={{ margin: 0 }}>{t.artist}</span>}
+                          {t.artist && <span className="qe-artist" style={{ margin: 0 }}>{t.artist}</span>}
                         </div>
-                        {isActive && (
-                          <div className="pq-progress-bar">
-                            <div className="pq-progress-fill pq-track-fill" style={{ width: `${Math.round(trackProgress * 100)}%` }} />
-                          </div>
-                        )}
                       </span>
-                      <button
-                        type="button" className="remove-btn"
-                        onClick={(e) => { e.stopPropagation(); removePlaylistEntry(entry.id) }}
-                        aria-label="Remove"
-                      >✕</button>
+                      <div className="qe-actions">
+                        <button type="button" onClick={() => moveCurrentEntry(idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
+                        <button type="button" onClick={() => moveCurrentEntry(idx, 1)} disabled={idx === playlist.entries.length - 1} aria-label="Move down">↓</button>
+                        <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
+                      </div>
                     </div>
                   )
                 })}
+                <p className="hint" style={{ margin: '6px 0 0' }}>
+                  {playlist.entries.filter(e => e.type === 'track').length} track(s) — click <strong>Save</strong> to store and clear
+                </p>
               </div>
-            </>
-          )}
-        </section>
+            )}
+
+            {/* ── Saved playlists ── */}
+            {savedPlaylists.length > 0 && (
+              <>
+                <h3 className="saved-playlists-heading">My Playlists</h3>
+                <div className="saved-playlists-list">
+                  {savedPlaylists.map((sp) => (
+                    <details key={sp.id} className="saved-playlist-item">
+                      <summary className="saved-playlist-summary">
+                        <input
+                          type="text"
+                          className="saved-playlist-name"
+                          value={sp.name}
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === ' ' || e.key === 'Enter') {
+                              e.stopPropagation()
+                              if (e.key === 'Enter') {
+                                e.currentTarget.blur()
+                              }
+                            }
+                          }}
+                          onChange={(e) => {
+                            const nextName = e.target.value
+                            setSavedPlaylists((prev) =>
+                              prev.map((p) => (p.id === sp.id ? { ...p, name: nextName } : p))
+                            )
+                          }}
+                        />
+                        <span className="saved-playlist-count">{sp.entries.length} entries</span>
+                        <button
+                          type="button"
+                          className="cta saved-playlist-load-btn"
+                          onClick={(e) => { e.preventDefault(); loadSavedPlaylist(sp) }}
+                        >
+                          Load
+                        </button>
+                        <button
+                          type="button"
+                          className="remove-btn"
+                          onClick={(e) => { e.preventDefault(); deleteSavedPlaylist(sp.id) }}
+                          aria-label="Delete saved playlist"
+                        >
+                          ✕
+                        </button>
+                      </summary>
+                      <div className="saved-playlist-entries">
+                        {sp.entries.map((entry, idx) => {
+                          if (entry.type === 'break') return (
+                            <div key={entry.id} className="qe-row qe-break">
+                              <span className="qe-num">{idx + 1}</span>
+                              <span className="qe-label">⏸ Break {entry.breakItem.durationSec}s</span>
+                              <div className="qe-actions">
+                                <button type="button" onClick={() => moveSavedEntry(sp.id, idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
+                                <button type="button" onClick={() => moveSavedEntry(sp.id, idx, 1)} disabled={idx === sp.entries.length - 1} aria-label="Move down">↓</button>
+                                <button type="button" className="remove-btn" onClick={() => removeSavedEntry(sp.id, entry.id)} aria-label="Remove">✕</button>
+                              </div>
+                            </div>
+                          )
+                          const t = tracksById[entry.trackId]
+                          if (!t) return (
+                            <div key={entry.id} className="qe-row qe-missing">
+                              <span className="qe-num">{idx + 1}</span>
+                              <span className="qe-label">Missing</span>
+                              <div className="qe-actions">
+                                <button type="button" className="remove-btn" onClick={() => removeSavedEntry(sp.id, entry.id)}>✕</button>
+                              </div>
+                            </div>
+                          )
+                          return (
+                            <div key={entry.id} className="qe-row">
+                              <span className="qe-num">{idx + 1}</span>
+                              <span className="dance-badge qe-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>{DANCE_ABBR[t.danceType]}</span>
+                              <span className="qe-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                <span className="qe-title">{cleanDisplayTitle(t.title)}</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.8rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
+                                    {[1, 2, 3, 4, 5].map((star) => {
+                                      const isFilled = star <= (t.qualityRating ?? 0)
+                                      return (
+                                        <span
+                                          key={star}
+                                          onClick={() => {
+                                            const newRating = t.qualityRating === star ? 0 : star
+                                            updateTrack(t.id, { qualityRating: newRating })
+                                          }}
+                                          style={{
+                                            cursor: 'pointer',
+                                            color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
+                                            padding: '0 1px',
+                                            display: 'inline-block',
+                                          }}
+                                          title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                                        >
+                                          ★
+                                        </span>
+                                      )
+                                    })}
+                                  </div>
+                                  {t.artist && <span className="qe-artist" style={{ margin: 0 }}>{t.artist}</span>}
+                                </div>
+                              </span>
+                              <div className="qe-actions">
+                                <button type="button" onClick={() => moveSavedEntry(sp.id, idx, -1)} disabled={idx === 0} aria-label="Move up">↑</button>
+                                <button type="button" onClick={() => moveSavedEntry(sp.id, idx, 1)} disabled={idx === sp.entries.length - 1} aria-label="Move down">↓</button>
+                                <button type="button" className="remove-btn" onClick={() => removeSavedEntry(sp.id, entry.id)} aria-label="Remove">✕</button>
+                              </div>
+                            </div>
+                          )
+                        })}
+                        <button
+                          type="button"
+                          className="cta saved-playlist-update-btn"
+                          onClick={() => {
+                            setSavedPlaylists((prev) => prev.map((p) => p.id === sp.id ? { ...sp } : p))
+                            setStatus(`Saved changes to "${sp.name}".`)
+                          }}
+                        >
+                          Save changes
+                        </button>
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </>
+            )}
+          </section>
+        )}
+
+        {/* ── Player ── */}
+        {activeTab === 'player' && (
+          <section className="panel">
+
+            {/* Playlist pickers: dance dances + other playlists */}
+            <div className="player-playlist-pickers">
+              <select
+                value={dancePlaylists.some((p) => p.id === playlist.id) ? playlist.id : ''}
+                onChange={(e) => {
+                  const found = dancePlaylists.find((p) => p.id === e.target.value)
+                  if (found) loadSavedPlaylist(found)
+                }}
+                disabled={dancePlaylists.length === 0}
+              >
+                <option value="">Dance…</option>
+                {dancePlaylists.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              {(() => {
+                const custom = savedPlaylists.filter((sp) => !dancePlaylists.some((dp) => dp.id === sp.id))
+                return (
+                  <select
+                    value={custom.some((p) => p.id === playlist.id) ? playlist.id : ''}
+                    onChange={(e) => {
+                      const found = custom.find((p) => p.id === e.target.value)
+                      if (found) loadSavedPlaylist(found)
+                    }}
+                    disabled={custom.length === 0}
+                  >
+                    <option value="">My Playlists…</option>
+                    {custom.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                )
+              })()}
+            </div>
+
+            <audio
+              ref={audioRef}
+              style={{ display: 'none' }}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              onEnded={() => setIsPlaying(false)}
+              onTimeUpdate={(e) => {
+                setMainCurrentTime(e.currentTarget.currentTime)
+                setMainDuration(e.currentTarget.duration || 0)
+              }}
+              onDurationChange={(e) => {
+                setMainDuration(e.currentTarget.duration || 0)
+              }}
+            />
+
+            {/* Main Now Playing Panel / Card */}
+            <div className="now-playing-card" style={{
+              background: 'linear-gradient(135deg, #0b1f2a 0%, #17323f 100%)',
+              color: '#fff9ef',
+              borderRadius: '16px',
+              padding: '16px',
+              boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+              marginBottom: '16px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px'
+            }}>
+              {/* Now-playing strip inside card */}
+              {breakInfo ? (
+                <div className="now-playing-strip now-playing-break" style={{ background: 'rgba(253, 230, 138, 0.15)', borderColor: 'rgba(240, 192, 64, 0.3)', color: '#fff9ef', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 12px', margin: 0 }}>
+                  <div className="now-playing-info">
+                    <span className="now-playing-title" style={{ color: '#ffd56b' }}>
+                      {breakInfo.mode === 'applause' ? '👏 Applause break' : breakInfo.mode === 'countdown' ? '⏳ Countdown break' : '🔇 Silence break'}
+                    </span>
+                    <span className="now-playing-artist" style={{ color: '#dbeafe' }}>
+                      {breakSecondsLeft !== null ? `${breakSecondsLeft}s remaining` : '…'}
+                    </span>
+                    <div className="now-playing-breakbar" style={{ background: 'rgba(255,255,255,0.1)' }}>
+                      <div
+                        className="now-playing-breakbar-fill"
+                        style={{ width: `${breakSecondsLeft !== null ? (breakSecondsLeft / breakInfo.totalSec) * 100 : 0}%`, background: '#ffd56b' }}
+                      />
+                    </div>
+                  </div>
+                  <span className="now-playing-break-badge" style={{ background: '#ffd56b', color: '#17323f' }}>{breakInfo.totalSec}s</span>
+                </div>
+              ) : currentTrack ? (
+                <div className="now-playing-strip" style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', padding: '10px 12px', margin: 0 }}>
+                  <div className="now-playing-info">
+                    <span className="now-playing-title" style={{ color: '#fff' }}>{cleanDisplayTitle(currentTrack.title)}</span>
+                    {currentTrack.artist && <span className="now-playing-artist" style={{ color: '#a0b2bd' }}>{currentTrack.artist}</span>}
+                  </div>
+                  <span className="dance-badge now-playing-badge" style={{ background: DANCE_COLORS[currentTrack.danceType] }}>
+                    {currentTrack.danceType}
+                  </span>
+                </div>
+              ) : (
+                <div className="now-playing-strip now-playing-empty" style={{ background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)', color: '#8a9aa3', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '12px' }}>
+                  No track playing
+                </div>
+              )}
+
+              {/* Unified Song Progress Bar */}
+              {currentTrack && (() => {
+                const dur = mainDuration || currentTrack.durationSec || 120
+                const cur = mainCurrentTime || 0
+
+                // Formatting function for MM:SS
+                const fmtSec = (s: number) => {
+                  const mins = Math.floor(Math.max(0, s) / 60)
+                  const secs = Math.floor(Math.max(0, s) % 60)
+                  return `${mins}:${String(secs).padStart(2, '0')}`
+                }
+
+                if (settings.wdsfTimedMode) {
+                  // In timed mode, progress runs from cueStartSec to cueStartSec + targetPlaytimeSec
+                  const cueStart = currentTrack.cueStartSec || 0
+                  const targetTime = currentTrack.targetPlaytimeSec || 90
+                  const limitTime = Math.min(dur, cueStart + targetTime)
+                  const timeLeft = Math.max(0, limitTime - cur)
+
+                  // Show the WDSF cue markers inside the bar
+                  const cuePos = (cueStart / dur) * 100
+                  const endPos = (limitTime / dur) * 100
+                  const fullPct = Math.min(100, Math.max(0, (cur / dur) * 100))
+
+                  return (
+                    <div className="cue-bar-wrap" style={{ margin: '4px 0 24px' }}>
+                      <div className="cue-bar-container">
+                        {!currentWaveform && (
+                          <div className="cue-bar" style={{ background: 'rgba(255,255,255,0.15)', height: '8px', borderRadius: '4px', position: 'relative', width: '100%' }}>
+                            <div className="cue-bar-active" style={{ position: 'absolute', height: '100%', left: `${cuePos}%`, width: `${endPos - cuePos}%`, background: '#4cd8b0', opacity: 0.3 }} />
+                            <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${fullPct}%`, background: '#4cd8b0', borderRadius: '4px' }} />
+                            <div className="cue-marker cue-marker-start" style={{ position: 'absolute', left: `${cuePos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px' }} title={`Cue: ${fmtSec(cueStart)}`} />
+                            <div className="cue-marker cue-marker-end" style={{ position: 'absolute', left: `${endPos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px' }} title={`End: ${fmtSec(limitTime)}`} />
+                          </div>
+                        )}
+                        {currentWaveform && (
+                          <div className="waveform-wrapper" style={{
+                            position: 'relative',
+                            width: '100%',
+                            height: '24px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '1.5px',
+                            pointerEvents: 'none'
+                          }}>
+                            {currentWaveform.map((val, idx) => {
+                              const barPct = (idx / currentWaveform.length) * 100
+                              const isActive = barPct <= fullPct
+                              const isWdsfActive = barPct >= cuePos && barPct <= endPos
+
+                              let barColor = 'rgba(255, 255, 255, 0.25)'
+                              if (isActive) {
+                                barColor = '#4cd8b0'
+                              } else if (isWdsfActive) {
+                                barColor = 'rgba(76, 216, 176, 0.35)'
+                              }
+
+                              return (
+                                <div
+                                  key={idx}
+                                  style={{
+                                    flex: 1,
+                                    height: `${Math.max(15, val * 100)}%`,
+                                    background: barColor,
+                                    borderRadius: '1px',
+                                    transition: 'background-color 0.1s'
+                                  }}
+                                />
+                              )
+                            })}
+                            <div className="cue-marker cue-marker-start" style={{ position: 'absolute', left: `${cuePos}%`, background: '#fff', width: '2px', height: '28px', top: '-2px', zIndex: 5 }} title={`Cue: ${fmtSec(cueStart)}`} />
+                            <div className="cue-marker cue-marker-end" style={{ position: 'absolute', left: `${endPos}%`, background: '#fff', width: '2px', height: '28px', top: '-2px', zIndex: 5 }} title={`End: ${fmtSec(limitTime)}`} />
+                          </div>
+                        )}
+                        <input
+                          type="range"
+                          className="cue-bar-slider"
+                          min={0}
+                          max={dur}
+                          step={0.1}
+                          value={cur}
+                          onChange={(e) => {
+                            const val = Number(e.target.value)
+                            const audio = audioRef.current
+                            if (audio) {
+                              audio.currentTime = val
+                              setMainCurrentTime(val)
+                            }
+                          }}
+                        />
+                        {/* Playhead pin below the waveform */}
+                        <div
+                          className="cue-playhead"
+                          style={{
+                            position: 'absolute',
+                            left: `${fullPct}%`,
+                            top: '27px',
+                            transform: 'translateX(-50%)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            pointerEvents: 'none',
+                            zIndex: 15
+                          }}
+                        >
+                          <div style={{
+                            width: 0,
+                            height: 0,
+                            borderLeft: '3px solid transparent',
+                            borderRight: '3px solid transparent',
+                            borderBottom: '4px solid #ffffff',
+                          }} />
+                          <div style={{
+                            width: '6px',
+                            height: '6px',
+                            borderRadius: '50%',
+                            background: '#ffffff',
+                            boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
+                            marginTop: '-1px'
+                          }} />
+                        </div>
+                      </div>
+                      <div className="cue-bar-labels" style={{ display: 'flex', justifyContent: 'space-between', color: '#a0b2bd', fontSize: '0.75rem', marginTop: '12px' }}>
+                        <span>▶ {fmtSec(cur)} / {fmtSec(limitTime)} (Cue: {fmtSec(cueStart)})</span>
+                        <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
+                      </div>
+                    </div>
+                  )
+                } else {
+                  // In untimed mode, progress runs from 0 to dur (full song)
+                  const pct = Math.min(100, Math.max(0, (cur / dur) * 100))
+                  const timeLeft = Math.max(0, dur - cur)
+
+                  return (
+                    <div className="cue-bar-wrap" style={{ margin: '4px 0 24px' }}>
+                      <div className="cue-bar-container">
+                        {!currentWaveform && (
+                          <div className="cue-bar" style={{ background: 'rgba(255,255,255,0.15)', height: '8px', borderRadius: '4px', position: 'relative', overflow: 'hidden', width: '100%' }}>
+                            <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${pct}%`, background: '#4cd8b0' }} />
+                          </div>
+                        )}
+                        {currentWaveform && (
+                          <div className="waveform-wrapper" style={{
+                            position: 'relative',
+                            width: '100%',
+                            height: '24px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '1.5px',
+                            pointerEvents: 'none'
+                          }}>
+                            {currentWaveform.map((val, idx) => {
+                              const barPct = (idx / currentWaveform.length) * 100
+                              const isActive = barPct <= pct
+
+                              let barColor = 'rgba(255, 255, 255, 0.25)'
+                              if (isActive) {
+                                barColor = '#4cd8b0'
+                              }
+
+                              return (
+                                <div
+                                  key={idx}
+                                  style={{
+                                    flex: 1,
+                                    height: `${Math.max(15, val * 100)}%`,
+                                    background: barColor,
+                                    borderRadius: '1px',
+                                    transition: 'background-color 0.1s'
+                                  }}
+                                />
+                              )
+                            })}
+                          </div>
+                        )}
+                        <input
+                          type="range"
+                          className="cue-bar-slider"
+                          min={0}
+                          max={dur}
+                          step={0.1}
+                          value={cur}
+                          onChange={(e) => {
+                            const val = Number(e.target.value)
+                            const audio = audioRef.current
+                            if (audio) {
+                              audio.currentTime = val
+                              setMainCurrentTime(val)
+                            }
+                          }}
+                        />
+                        {/* Playhead pin below the waveform */}
+                        <div
+                          className="cue-playhead"
+                          style={{
+                            position: 'absolute',
+                            left: `${pct}%`,
+                            top: '27px',
+                            transform: 'translateX(-50%)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            pointerEvents: 'none',
+                            zIndex: 15
+                          }}
+                        >
+                          <div style={{
+                            width: 0,
+                            height: 0,
+                            borderLeft: '3px solid transparent',
+                            borderRight: '3px solid transparent',
+                            borderBottom: '4px solid #ffffff',
+                          }} />
+                          <div style={{
+                            width: '6px',
+                            height: '6px',
+                            borderRadius: '50%',
+                            background: '#ffffff',
+                            boxShadow: '0 2px 4px rgba(0,0,0,0.4)',
+                            marginTop: '-1px'
+                          }} />
+                        </div>
+                      </div>
+                      <div className="cue-bar-labels" style={{ display: 'flex', justifyContent: 'space-between', color: '#a0b2bd', fontSize: '0.75rem', marginTop: '12px' }}>
+                        <span>▶ {fmtSec(cur)} / {fmtSec(dur)}</span>
+                        <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
+                      </div>
+                    </div>
+                  )
+                }
+              })()}
+
+              {/* Custom playback controls inside card */}
+              <div className="player-controls" style={{ display: 'flex', gap: '8px', justifyContent: 'center', margin: '4px 0', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="ctrl-btn main-play-btn"
+                  title={isPlaying ? "Pause" : "Play"}
+                  onClick={togglePlayPause}
+                  style={{
+                    background: isPlaying ? '#00b06b' : '#0c6b69',
+                    color: '#fff',
+                    borderColor: 'rgba(255,255,255,0.15)',
+                    fontSize: '1.1rem',
+                    padding: '8px 20px',
+                    borderRadius: '12px',
+                    flex: '1 1 100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 'bold',
+                    transition: 'background 0.2s'
+                  }}
+                >
+                  {isPlaying ? '⏸ Pause' : '▶ Play'}
+                </button>
+                <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="Restart track" onClick={repeatSong}>↺ Restart</button>
+                <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="−15 seconds" onClick={() => seekBy(-15)}>-15s</button>
+                <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="+15 seconds" onClick={() => seekBy(15)}>+15s</button>
+                <button type="button" className="ctrl-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', flex: '1 1 50px' }} title="Next track" onClick={nextSong}>⏭ Next</button>
+              </div>
+
+              {/* Speed row inside card */}
+              <div className="player-speed-row" style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0 0' }}>
+                <button type="button" className="ctrl-btn speed-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', padding: '5px 10px' }} onClick={() => applySpeedDelta(-10)}>−10%</button>
+                <input
+                  type="range"
+                  className="speed-slider"
+                  style={{ flex: 1 }}
+                  min={-50}
+                  max={50}
+                  value={settings.speedPct}
+                  onChange={(e) => setSettings((prev) => ({ ...prev, speedPct: clampSpeed(Number(e.target.value)) }))}
+                />
+                <button type="button" className="ctrl-btn speed-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', padding: '5px 10px' }} onClick={() => applySpeedDelta(10)}>+10%</button>
+                <span className="speed-label" style={{ color: '#fff9ef', fontSize: '0.85rem', minWidth: '45px', textAlign: 'right' }}>{settings.speedPct > 0 ? '+' : ''}{settings.speedPct}%</span>
+              </div>
+            </div>
+
+            {/* Settings & Automation collapsible card */}
+            <details className="settings-automation-card" style={{
+              background: 'linear-gradient(135deg, #102430 0%, #1c3d4e 100%)',
+              color: '#fff9ef',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              borderRadius: '12px',
+              padding: '12px',
+              marginBottom: '16px'
+            }}>
+              <summary style={{ fontWeight: 'bold', fontSize: '0.95rem', color: '#fff9ef', cursor: 'pointer', outline: 'none', listStyle: 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>⚙ Settings &amp; Automation</span>
+                <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>▼</span>
+              </summary>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '10px' }}>
+                {/* Playback Sequence */}
+                <div>
+                  <h4 style={{ margin: '0 0 6px', fontSize: '0.9rem', borderBottom: '1px solid rgba(255, 255, 255, 0.15)', paddingBottom: '4px' }}>Playback sequence</h4>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    {(['default', 'rating', 'shuffle'] as const).map((mode) => {
+                      const labels = {
+                        default: 'Default (Playlist)',
+                        rating: 'Best to Worst',
+                        shuffle: 'Shuffle'
+                      }
+                      return (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => setSettings((prev) => ({ ...prev, playSequence: mode }))}
+                          style={{
+                            flex: 1,
+                            padding: '6px 8px',
+                            fontSize: '0.8rem',
+                            background: (settings.playSequence ?? 'default') === mode ? '#00b06b' : 'rgba(255,255,255,0.1)',
+                            color: '#fff',
+                            border: '1px solid rgba(255,255,255,0.15)',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            fontWeight: (settings.playSequence ?? 'default') === mode ? 'bold' : 'normal'
+                          }}
+                        >
+                          {(settings.playSequence ?? 'default') === mode ? '✓ ' : ''}{labels[mode]}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="row compact" style={{ margin: 0, display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                  <label className="check" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={settings.wdsfTimedMode}
+                      onChange={(e) => setSettings((prev) => ({ ...prev, wdsfTimedMode: e.target.checked }))}
+                    />
+                    <span>⏱️ WDSF timed mode</span>
+                  </label>
+                  <label className="check" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={sessionRule.announcementEnabled}
+                      onChange={(e) => setSessionRule((prev) => ({ ...prev, announcementEnabled: e.target.checked }))}
+                    />
+                    <span>📢 Announce next dance</span>
+                  </label>
+                  <label className="check" style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={settings.repeatPlaylist ?? false}
+                      onChange={(e) => setSettings((prev) => ({ ...prev, repeatPlaylist: e.target.checked }))}
+                    />
+                    <span>🔁 Repeat playlist</span>
+                  </label>
+                </div>
+
+                {/* Break between tracks */}
+                <div>
+                  <h4 style={{ margin: '0 0 6px', fontSize: '0.9rem', borderBottom: '1px solid rgba(255, 255, 255, 0.15)', paddingBottom: '4px' }}>Break between tracks</h4>
+                  <div className="row compact" style={{ margin: 0 }}>
+                    <label className="check">
+                      <input
+                        type="checkbox"
+                        checked={sessionRule.autoBreakEnabled}
+                        onChange={(e) => setSessionRule((prev) => ({ ...prev, autoBreakEnabled: e.target.checked }))}
+                      />
+                      Enable break
+                    </label>
+                  </div>
+                  {sessionRule.autoBreakEnabled && (
+                    <div className="row compact break-settings-row" style={{ marginTop: '8px', marginBottom: 0 }}>
+                      <label style={{ color: '#fff9ef' }}>
+                        Duration
+                        <select
+                          value={sessionRule.breakDurationSec}
+                          onChange={(e) => setSessionRule((prev) => ({ ...prev, breakDurationSec: Number(e.target.value) }))}
+                          style={{ background: '#1c3d4e', color: '#fff9ef', borderColor: 'rgba(255, 255, 255, 0.2)' }}
+                        >
+                          {Array.from({ length: 24 }, (_, i) => (i + 1) * 5).map((s) => (
+                            <option key={s} value={s}>{s}s</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label style={{ color: '#fff9ef' }}>
+                        Mode
+                        <select
+                          value={sessionRule.breakMode ?? 'countdown'}
+                          onChange={(e) => setSessionRule((prev) => ({ ...prev, breakMode: e.target.value as SessionRule['breakMode'] }))}
+                          style={{ background: '#1c3d4e', color: '#fff9ef', borderColor: 'rgba(255, 255, 255, 0.2)' }}
+                        >
+                          <option value="silence">Silence</option>
+                          <option value="countdown">Countdown</option>
+                          <option value="applause">Applause</option>
+                        </select>
+                      </label>
+                    </div>
+                  )}
+                </div>
+
+              </div>
+            </details>
+
+            {/* ── Upcoming queue ── */}
+            {playableEntries.length > 0 && (
+              <>
+                <h3 className="upcoming-heading">
+                  Up next
+                  {currentIndex >= 0 && (
+                    <span className="upcoming-progress">
+                      {currentIndex + 1} / {playableEntries.length}
+                    </span>
+                  )}
+                </h3>
+                <div className="player-queue-list">
+                  {playableEntries.map((entry, index) => {
+                    const isActive = entry.id === activeEntryId
+                    const isPast = currentIndex >= 0 && index < currentIndex
+                    if (entry.type === 'break') {
+                      return (
+                        <div
+                          key={entry.id}
+                          className={`pq-row pq-break${isActive ? ' pq-active' : ''}${isPast ? ' pq-past' : ''}`}
+                        >
+                          <span className="pq-num">{index + 1}</span>
+                          <span className="pq-label">⏸ Break {entry.breakItem.durationSec}s ({entry.breakItem.mode})</span>
+                          <button
+                            type="button" className="remove-btn"
+                            onClick={() => removePlaylistEntry(entry.id)}
+                            aria-label="Remove"
+                          >✕</button>
+                        </div>
+                      )
+                    }
+                    const t = tracksById[entry.trackId]
+                    if (!t) return (
+                      <div key={entry.id} className="pq-row pq-missing">
+                        <span className="pq-num">{index + 1}</span>
+                        <span className="pq-label">Missing track</span>
+                        <button type="button" className="remove-btn" onClick={() => removePlaylistEntry(entry.id)} aria-label="Remove">✕</button>
+                      </div>
+                    )
+                    return (
+                      <div
+                        key={entry.id}
+                        className={`pq-row${isActive ? ' pq-active' : ''}${isPast ? ' pq-past' : ''}`}
+                        onClick={() => void playEntryByIndex(index)}
+                      >
+                        <span className="pq-num">{index + 1}</span>
+                        <span className="dance-badge pq-badge" style={{ background: DANCE_COLORS[t.danceType] }} title={t.danceType}>
+                          {DANCE_ABBR[t.danceType]}
+                        </span>
+                        <span className="pq-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                          {isActive && <span className="pq-now-playing-label">▶ Now playing</span>}
+                          <span className="pq-title">{cleanDisplayTitle(t.title)}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.8rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
+                              {[1, 2, 3, 4, 5].map((star) => {
+                                const isFilled = star <= (t.qualityRating ?? 0)
+                                return (
+                                  <span
+                                    key={star}
+                                    onClick={() => {
+                                      const newRating = t.qualityRating === star ? 0 : star
+                                      updateTrack(t.id, { qualityRating: newRating })
+                                    }}
+                                    style={{
+                                      cursor: 'pointer',
+                                      color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
+                                      padding: '0 1px',
+                                      display: 'inline-block',
+                                    }}
+                                    title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                                  >
+                                    ★
+                                  </span>
+                                )
+                              })}
+                            </div>
+                            {t.artist && <span className="pq-artist" style={{ margin: 0 }}>{t.artist}</span>}
+                          </div>
+                          {isActive && (
+                            <div className="pq-progress-bar">
+                              <div className="pq-progress-fill pq-track-fill" style={{ width: `${Math.round(trackProgress * 100)}%` }} />
+                            </div>
+                          )}
+                        </span>
+                        <button
+                          type="button" className="remove-btn"
+                          onClick={(e) => { e.stopPropagation(); removePlaylistEntry(entry.id) }}
+                          aria-label="Remove"
+                        >✕</button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
+            )}
+          </section>
         )}
 
         {/* ── Export ── */}
         {activeTab === 'export' && (
-        <>
-        <section className="panel panel-backup">
-          <h2>Backup &amp; Restore</h2>
-          <p className="hint">
-            Safari PWA storage is not backed up by iCloud. Export your data as JSON and save it to
-            iCloud Drive so you can restore after reinstalling or switching devices.
-          </p>
+          <>
+            <section className="panel panel-backup">
+              <h2>Backup &amp; Restore</h2>
+              <p className="hint">
+                Safari PWA storage is not backed up by iCloud. Export your data as JSON and save it to
+                iCloud Drive so you can restore after reinstalling or switching devices.
+              </p>
 
-          <h3>Export</h3>
-          <div className="row compact">
-            <button type="button" onClick={exportPlaylist}>
-              Export playlist
-            </button>
-            <button type="button" onClick={exportLibrary}>
-              Export library metadata
-            </button>
-          </div>
+              <h3>Export</h3>
+              <div className="row compact">
+                <button type="button" onClick={exportPlaylist}>
+                  Export playlist
+                </button>
+                <button type="button" onClick={exportLibrary}>
+                  Export library metadata
+                </button>
+              </div>
 
-          <h3>Reset</h3>
-          <p className="hint">
-            Deletes all songs, playlists, and cached audio. The app returns to its empty default
-            state. This cannot be undone.
-          </p>
-          <button
-            type="button"
-            className="btn-danger"
-            onClick={() => setShowResetConfirm(true)}
-          >
-            🗑 Reset app to default
-          </button>
-
-          <h3>Import backup</h3>
-          <p className="hint">
-            Select a previously exported <code>.json</code> file. Audio files are not included —
-            re-import them from iCloud Drive separately after restoring.
-          </p>
-          <label className="file-label" htmlFor="backup-file">
-            Choose backup JSON
-          </label>
-          <input
-            id="backup-file"
-            type="file"
-            accept=".json,application/json"
-            onChange={handleImportBackup}
-            style={{ display: 'none' }}
-          />
-        </section>
-
-        <section className="panel panel-backup" style={{ marginTop: '20px' }}>
-          <h2>Desktop Helper Tool</h2>
-          <p className="hint">
-            To view, edit, or adjust audio file ratings directly on your local computer, download the standalone rating editor utility.
-          </p>
-          
-          <div className="helper-tool-card" style={{ marginTop: '15px' }}>
-            <h3>Audio Rating Editor</h3>
-            <p className="hint">
-              This utility scans a directory, displays metadata tags (Artist, Album, Title), supports test playback, and allows setting stars that write directly back into the MP3's Popularimeter (POPM) tag.
-            </p>
-            
-            <div style={{ marginTop: '15px', marginBottom: '15px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-              <button type="button" onClick={downloadRatingEditorExe} style={{ background: '#00b06b', color: '#ffffff' }}>
-                🚀 Download for Windows (.exe)
+              <h3>Reset</h3>
+              <p className="hint">
+                Deletes all songs, playlists, and cached audio. The app returns to its empty default
+                state. This cannot be undone.
+              </p>
+              <button
+                type="button"
+                className="btn-danger"
+                onClick={() => setShowResetConfirm(true)}
+              >
+                🗑 Reset app to default
               </button>
-              <button type="button" onClick={downloadRatingEditor}>
-                🐍 Download Python Script (.py)
-              </button>
-            </div>
-            
-            <div className="setup-instructions" style={{ marginTop: '15px', padding: '15px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
-              <h4 style={{ margin: '0 0 10px 0', fontSize: '15px', fontWeight: 'bold' }}>Quick Setup Instructions:</h4>
-              <ul className="hint" style={{ paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '13px', lineHeight: '1.5', listStyleType: 'disc' }}>
-                <li>
-                  <strong>Windows users:</strong> Simply download the <code>.exe</code> above and run it directly. No Python or libraries required!
-                </li>
-                <li>
-                  <strong>Mac / Linux users:</strong> Download the <code>.py</code> script, ensure Python is installed, then:
-                  <ol style={{ paddingLeft: '20px', marginTop: '5px', display: 'flex', flexDirection: 'column', gap: '4px', listStyleType: 'decimal' }}>
-                    <li>Open terminal and install dependencies:
-                      <code style={{ display: 'block', margin: '4px 0', padding: '6px', background: '#121214', borderRadius: '4px', border: '1px solid #333', color: '#00b06b', fontFamily: 'monospace' }}>
-                        pip install mutagen just_playback
-                      </code>
+
+              <h3>Import backup</h3>
+              <p className="hint">
+                Select a previously exported <code>.json</code> file. Audio files are not included —
+                re-import them from iCloud Drive separately after restoring.
+              </p>
+              <label className="file-label" htmlFor="backup-file">
+                Choose backup JSON
+              </label>
+              <input
+                id="backup-file"
+                type="file"
+                accept=".json,application/json"
+                onChange={handleImportBackup}
+                style={{ display: 'none' }}
+              />
+            </section>
+
+            <section className="panel panel-backup" style={{ marginTop: '20px' }}>
+              <h2>Desktop Helper Tool</h2>
+              <p className="hint">
+                To view, edit, or adjust audio file ratings directly on your local computer, download the standalone rating editor utility.
+              </p>
+
+              <div className="helper-tool-card" style={{ marginTop: '15px' }}>
+                <h3>Audio Rating Editor</h3>
+                <p className="hint">
+                  This utility scans a directory, displays metadata tags (Artist, Album, Title), supports test playback, and allows setting stars that write directly back into the MP3's Popularimeter (POPM) tag.
+                </p>
+
+                <div style={{ marginTop: '15px', marginBottom: '15px', display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                  <button type="button" onClick={downloadRatingEditorExe} style={{ background: '#00b06b', color: '#ffffff' }}>
+                    🚀 Download for Windows (.exe)
+                  </button>
+                  <button type="button" onClick={downloadRatingEditor}>
+                    🐍 Download Python Script (.py)
+                  </button>
+                </div>
+
+                <div className="setup-instructions" style={{ marginTop: '15px', padding: '15px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '8px', border: '1px solid rgba(255, 255, 255, 0.1)' }}>
+                  <h4 style={{ margin: '0 0 10px 0', fontSize: '15px', fontWeight: 'bold' }}>Quick Setup Instructions:</h4>
+                  <ul className="hint" style={{ paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '13px', lineHeight: '1.5', listStyleType: 'disc' }}>
+                    <li>
+                      <strong>Windows users:</strong> Simply download the <code>.exe</code> above and run it directly. No Python or libraries required!
                     </li>
-                    <li>Run the script:
-                      <code style={{ display: 'block', margin: '4px 0', padding: '6px', background: '#121214', borderRadius: '4px', border: '1px solid #333', color: '#00b06b', fontFamily: 'monospace' }}>
-                        python rating_editor.py
-                      </code>
+                    <li>
+                      <strong>Mac / Linux users:</strong> Download the <code>.py</code> script, ensure Python is installed, then:
+                      <ol style={{ paddingLeft: '20px', marginTop: '5px', display: 'flex', flexDirection: 'column', gap: '4px', listStyleType: 'decimal' }}>
+                        <li>Open terminal and install dependencies:
+                          <code style={{ display: 'block', margin: '4px 0', padding: '6px', background: '#121214', borderRadius: '4px', border: '1px solid #333', color: '#00b06b', fontFamily: 'monospace' }}>
+                            pip install mutagen just_playback
+                          </code>
+                        </li>
+                        <li>Run the script:
+                          <code style={{ display: 'block', margin: '4px 0', padding: '6px', background: '#121214', borderRadius: '4px', border: '1px solid #333', color: '#00b06b', fontFamily: 'monospace' }}>
+                            python rating_editor.py
+                          </code>
+                        </li>
+                      </ol>
                     </li>
-                  </ol>
-                </li>
-              </ul>
-            </div>
-          </div>
-        </section>
-        </>
+                  </ul>
+                </div>
+              </div>
+            </section>
+          </>
         )}
       </main>
 
@@ -2788,178 +2819,178 @@ function App() {
               <div key={cat.label} className="dance-category-group">
                 <h3 className="dance-category-label">{cat.label}</h3>
                 <div className="dance-playlists-grid">
-            {catPlaylists.map((dp) => {
-              const color = DANCE_COLORS[dp.name as DanceType] ?? '#555'
-              const isOpen = openDanceCards.has(dp.id) || dp.name === activeDanceType
-              const sortMode = dancePlaylistSorts[dp.id] ?? 'name'
-              return (
-                <details
-                  key={dp.id}
-                  className="dance-playlist-card"
-                  open={isOpen}
-                  onToggle={(e) => {
-                    const opened = (e.currentTarget as HTMLDetailsElement).open
-                    setOpenDanceCards((prev) => {
-                      const next = new Set(prev)
-                      if (opened) next.add(dp.id); else next.delete(dp.id)
-                      return next
-                    })
-                  }}
-                >
-                  <summary className="dance-playlist-card-header" style={{ background: color }}>
-                    <span className="dance-playlist-card-title">{dp.name}</span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} onClick={(e) => e.stopPropagation()}>
-                      <span className="dance-playlist-card-count">{dp.entries.length} track{dp.entries.length !== 1 ? 's' : ''}</span>
-                      <div style={{ display: 'inline-flex', gap: '2px', background: 'rgba(0,0,0,0.22)', borderRadius: '5px', padding: '2px' }}>
-                        <button
-                          type="button"
-                          title="Sort by Name"
-                          onClick={() => setDancePlaylistSorts((prev) => ({ ...prev, [dp.id]: 'name' }))}
-                          style={{
-                            padding: '3px',
-                            border: 'none',
-                            background: sortMode === 'name' ? 'rgba(255,255,255,0.25)' : 'transparent',
-                            color: '#fff',
-                            cursor: 'pointer',
-                            borderRadius: '3px',
-                            lineHeight: 1,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
-                            <path d="M4 6h9M4 12h7M4 18h7M17 6v12M17 18l-3-3M17 18l3-3" />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          title="Sort by Stars"
-                          onClick={() => setDancePlaylistSorts((prev) => ({ ...prev, [dp.id]: 'stars' }))}
-                          style={{
-                            padding: '3px',
-                            border: 'none',
-                            background: sortMode === 'stars' ? 'rgba(255,255,255,0.25)' : 'transparent',
-                            color: '#fff',
-                            cursor: 'pointer',
-                            borderRadius: '3px',
-                            lineHeight: 1,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
-                        >
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
-                            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  </summary>
-                  <div className="dance-playlist-tracks">
-                    {(() => {
-                      const sorted = [...dp.entries].sort((a, b) => {
-                        if (a.type !== 'track' || b.type !== 'track') return 0
-                        const trackA = tracksById[a.trackId]
-                        const trackB = tracksById[b.trackId]
-                        if (!trackA || !trackB) return 0
-                        if (sortMode === 'stars') {
-                          const diff = (trackB.qualityRating ?? 0) - (trackA.qualityRating ?? 0)
-                          if (diff !== 0) return diff
-                        }
-                        return cleanDisplayTitle(trackA.title).localeCompare(cleanDisplayTitle(trackB.title))
-                      })
-                      return sorted.map((entry, idx) => {
-                        if (entry.type !== 'track') return null
-                        const t = tracksById[entry.trackId]
-                        if (!t) return null
-                        const isMarked = playlist.entries.some((e) => e.type === 'track' && e.trackId === entry.trackId)
-                        return (
-                          <div key={entry.id} className={`dance-playlist-track-row ${isMarked ? 'marked' : ''}`}>
-                            <button
-                              type="button"
-                              title="Add to queue"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setPlaylist((prev) => ({
-                                  ...prev,
-                                  entries: [...prev.entries, { id: createId('entry-track'), type: 'track' as const, trackId: entry.trackId }],
-                                }))
-                                setStatus(`Added \u201c${t.title}\u201d to playlist.`)
-                              }}
-                              style={{
-                                border: `1.5px solid ${isMarked ? 'var(--ok)' : '#7a8a95'}`,
-                                borderRadius: '50%',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                width: '24px',
-                                height: '24px',
-                                minWidth: '24px',
-                                padding: 0,
-                                background: isMarked ? 'var(--ok)' : 'transparent',
-                                color: isMarked ? '#fff' : '#7a8a95',
-                                fontWeight: 'bold',
-                                fontSize: '0.85rem',
-                                cursor: 'pointer',
-                                transition: 'all 0.12s',
-                                flexShrink: 0,
-                                outline: 'none',
-                                lineHeight: 1,
-                                marginRight: '4px',
-                              }}
-                            >
-                              {idx + 1}
-                            </button>
-                              <div className="dance-track-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                                <span className="dance-track-title">{cleanDisplayTitle(t.title)}</span>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                  <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.85rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
-                                    {[1, 2, 3, 4, 5].map((star) => {
-                                      const isFilled = star <= (t.qualityRating ?? 0)
-                                      return (
-                                        <span
-                                          key={star}
-                                          onClick={() => {
-                                            const newRating = t.qualityRating === star ? 0 : star
-                                            updateTrack(t.id, { qualityRating: newRating })
-                                          }}
-                                          style={{
-                                            cursor: 'pointer',
-                                            color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
-                                            padding: '0 1px',
-                                            display: 'inline-block',
-                                          }}
-                                          title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
-                                        >
-                                          ★
-                                        </span>
-                                      )
-                                    })}
+                  {catPlaylists.map((dp) => {
+                    const color = DANCE_COLORS[dp.name as DanceType] ?? '#555'
+                    const isOpen = openDanceCards.has(dp.id) || dp.name === activeDanceType
+                    const sortMode = dancePlaylistSorts[dp.id] ?? 'name'
+                    return (
+                      <details
+                        key={dp.id}
+                        className="dance-playlist-card"
+                        open={isOpen}
+                        onToggle={(e) => {
+                          const opened = (e.currentTarget as HTMLDetailsElement).open
+                          setOpenDanceCards((prev) => {
+                            const next = new Set(prev)
+                            if (opened) next.add(dp.id); else next.delete(dp.id)
+                            return next
+                          })
+                        }}
+                      >
+                        <summary className="dance-playlist-card-header" style={{ background: color }}>
+                          <span className="dance-playlist-card-title">{dp.name}</span>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} onClick={(e) => e.stopPropagation()}>
+                            <span className="dance-playlist-card-count">{dp.entries.length} track{dp.entries.length !== 1 ? 's' : ''}</span>
+                            <div style={{ display: 'inline-flex', gap: '2px', background: 'rgba(0,0,0,0.22)', borderRadius: '5px', padding: '2px' }}>
+                              <button
+                                type="button"
+                                title="Sort by Name"
+                                onClick={() => setDancePlaylistSorts((prev) => ({ ...prev, [dp.id]: 'name' }))}
+                                style={{
+                                  padding: '3px',
+                                  border: 'none',
+                                  background: sortMode === 'name' ? 'rgba(255,255,255,0.25)' : 'transparent',
+                                  color: '#fff',
+                                  cursor: 'pointer',
+                                  borderRadius: '3px',
+                                  lineHeight: 1,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                                  <path d="M4 6h9M4 12h7M4 18h7M17 6v12M17 18l-3-3M17 18l3-3" />
+                                </svg>
+                              </button>
+                              <button
+                                type="button"
+                                title="Sort by Stars"
+                                onClick={() => setDancePlaylistSorts((prev) => ({ ...prev, [dp.id]: 'stars' }))}
+                                style={{
+                                  padding: '3px',
+                                  border: 'none',
+                                  background: sortMode === 'stars' ? 'rgba(255,255,255,0.25)' : 'transparent',
+                                  color: '#fff',
+                                  cursor: 'pointer',
+                                  borderRadius: '3px',
+                                  lineHeight: 1,
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+                                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                        </summary>
+                        <div className="dance-playlist-tracks">
+                          {(() => {
+                            const sorted = [...dp.entries].sort((a, b) => {
+                              if (a.type !== 'track' || b.type !== 'track') return 0
+                              const trackA = tracksById[a.trackId]
+                              const trackB = tracksById[b.trackId]
+                              if (!trackA || !trackB) return 0
+                              if (sortMode === 'stars') {
+                                const diff = (trackB.qualityRating ?? 0) - (trackA.qualityRating ?? 0)
+                                if (diff !== 0) return diff
+                              }
+                              return cleanDisplayTitle(trackA.title).localeCompare(cleanDisplayTitle(trackB.title))
+                            })
+                            return sorted.map((entry, idx) => {
+                              if (entry.type !== 'track') return null
+                              const t = tracksById[entry.trackId]
+                              if (!t) return null
+                              const isMarked = playlist.entries.some((e) => e.type === 'track' && e.trackId === entry.trackId)
+                              return (
+                                <div key={entry.id} className={`dance-playlist-track-row ${isMarked ? 'marked' : ''}`}>
+                                  <button
+                                    type="button"
+                                    title="Add to queue"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setPlaylist((prev) => ({
+                                        ...prev,
+                                        entries: [...prev.entries, { id: createId('entry-track'), type: 'track' as const, trackId: entry.trackId }],
+                                      }))
+                                      setStatus(`Added \u201c${t.title}\u201d to playlist.`)
+                                    }}
+                                    style={{
+                                      border: `1.5px solid ${isMarked ? 'var(--ok)' : '#7a8a95'}`,
+                                      borderRadius: '50%',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      width: '24px',
+                                      height: '24px',
+                                      minWidth: '24px',
+                                      padding: 0,
+                                      background: isMarked ? 'var(--ok)' : 'transparent',
+                                      color: isMarked ? '#fff' : '#7a8a95',
+                                      fontWeight: 'bold',
+                                      fontSize: '0.85rem',
+                                      cursor: 'pointer',
+                                      transition: 'all 0.12s',
+                                      flexShrink: 0,
+                                      outline: 'none',
+                                      lineHeight: 1,
+                                      marginRight: '4px',
+                                    }}
+                                  >
+                                    {idx + 1}
+                                  </button>
+                                  <div className="dance-track-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                    <span className="dance-track-title">{cleanDisplayTitle(t.title)}</span>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                      <div style={{ display: 'inline-flex', gap: '0px', fontSize: '0.85rem', userSelect: 'none', lineHeight: 1 }} onClick={(e) => e.stopPropagation()}>
+                                        {[1, 2, 3, 4, 5].map((star) => {
+                                          const isFilled = star <= (t.qualityRating ?? 0)
+                                          return (
+                                            <span
+                                              key={star}
+                                              onClick={() => {
+                                                const newRating = t.qualityRating === star ? 0 : star
+                                                updateTrack(t.id, { qualityRating: newRating })
+                                              }}
+                                              style={{
+                                                cursor: 'pointer',
+                                                color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
+                                                padding: '0 1px',
+                                                display: 'inline-block',
+                                              }}
+                                              title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                                            >
+                                              ★
+                                            </span>
+                                          )
+                                        })}
+                                      </div>
+                                    </div>
                                   </div>
-                                  </div>
-                              </div>
-                            <button
-                              type="button"
-                              className={previewingTrackId === entry.trackId ? 'previewing' : ''}
-                              title={previewingTrackId === entry.trackId ? 'Stop preview' : 'Preview'}
-                              onClick={(e) => { e.stopPropagation(); void togglePreview(entry.trackId) }}
-                              style={{ marginRight: '4px' }}
-                            >{previewingTrackId === entry.trackId ? '■' : '▶'}</button>
-                            <button
-                              type="button"
-                              className="track-row-pencil-btn"
-                              title="Edit track"
-                              onClick={(e) => { e.stopPropagation(); setEditingTrackId(t.id) }}
-                            >✎</button>
+                                  <button
+                                    type="button"
+                                    className={previewingTrackId === entry.trackId ? 'previewing' : ''}
+                                    title={previewingTrackId === entry.trackId ? 'Stop preview' : 'Preview'}
+                                    onClick={(e) => { e.stopPropagation(); void togglePreview(entry.trackId) }}
+                                    style={{ marginRight: '4px' }}
+                                  >{previewingTrackId === entry.trackId ? '■' : '▶'}</button>
+                                  <button
+                                    type="button"
+                                    className="track-row-pencil-btn"
+                                    title="Edit track"
+                                    onClick={(e) => { e.stopPropagation(); setEditingTrackId(t.id) }}
+                                  >✎</button>
+                                </div>
+                              )
+                            })
+                          })()}
                         </div>
-                      )
-                    })
-                  })()}
-                  </div>
-                </details>
-              )
-            })}
+                      </details>
+                    )
+                  })}
                 </div>
               </div>
             )
@@ -2969,10 +3000,10 @@ function App() {
 
       <nav className="tab-bar" role="tablist" aria-label="Main navigation">
         {([
-          { id: 'songs',     label: 'Songs',     icon: '♫',  badge: null },
-          { id: 'playlists', label: 'Playlists', icon: '☰',  badge: playlist.entries.filter((e) => e.type === 'track').length || null },
-          { id: 'player',    label: 'Player',    icon: '▶',  badge: activeEntryId ? playlist.entries.filter((e) => e.type === 'track').length || null : null },
-          { id: 'export',    label: 'Export',    icon: '⬆',  badge: null },
+          { id: 'songs', label: 'Songs', icon: '♫', badge: null },
+          { id: 'playlists', label: 'Playlists', icon: '☰', badge: playlist.entries.filter((e) => e.type === 'track').length || null },
+          { id: 'player', label: 'Player', icon: '▶', badge: activeEntryId ? playlist.entries.filter((e) => e.type === 'track').length || null : null },
+          { id: 'export', label: 'Export', icon: '⬆', badge: null },
         ] as const).map(({ id, label, icon, badge }) => (
           <button
             key={id}

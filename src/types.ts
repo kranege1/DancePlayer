@@ -73,6 +73,7 @@ export interface AppSettings {
   language: 'en' | 'de'
   grokApiKey?: string
   playSequence?: 'default' | 'rating' | 'shuffle'
+  repeatPlaylist?: boolean
 }
 
 export const WDSF_2025_DEFAULT_PLAYTIMES: Record<DanceType, number> = {
