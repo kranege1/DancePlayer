@@ -40,8 +40,12 @@ export interface Track {
   fadeOutSec: number
   hash?: string
   removedEarlier?: boolean
-  beat1Phase?: number
-  beat1Interval?: number
+  beatPairs?: BeatPair[]
+}
+
+export interface BeatPair {
+  t1: number
+  t2: number
 }
 
 export interface BreakItem {

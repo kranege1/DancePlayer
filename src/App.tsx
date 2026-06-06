@@ -5,13 +5,13 @@ import {
   DANCES,
   DANCE_CATEGORIES,
   WDSF_2025_DEFAULT_PLAYTIMES,
-  WDSF_2025_BPM_RANGES,
   type AppSettings,
   type DanceType,
   type Playlist,
   type PlaylistEntry,
   type SessionRule,
   type Track,
+  type BeatPair,
 } from './types'
 import { clearAllAudioFiles, getAudioFile, saveAudioFile, removeAudioFile } from './mediaStore'
 import { analyzeTrackRhythm } from './analysis'
@@ -435,52 +435,114 @@ function App() {
   }, [activeEntryId, playableEntries, tracksById])
 
   // Derived state: calculate current beat number if playing and aligned
-  const currentBeatNum = useMemo(() => {
-    if (!currentTrack || currentTrack.beat1Phase === undefined || currentTrack.beat1Interval === undefined || currentTrack.beat1Interval <= 0) {
-      return null
-    }
-    const phase = currentTrack.beat1Phase
-    const interval = currentTrack.beat1Interval
-    const cur = mainCurrentTime || 0
-    const beatsPerBar = BEATS_PER_BAR[currentTrack.danceType] || 4
-    const beatDuration = interval / beatsPerBar
-    const elapsed = cur - phase
-    let num = 1
-    if (elapsed >= 0) {
-      const barIndex = Math.floor(elapsed / interval)
-      const timeInBar = elapsed - barIndex * interval
-      num = Math.floor(timeInBar / beatDuration) + 1
-      if (num > beatsPerBar) num = beatsPerBar
-    } else {
-      const elapsedAbs = Math.abs(elapsed)
-      const barIndex = Math.ceil(elapsedAbs / interval)
-      const projectedStart = phase - barIndex * interval
-      num = Math.floor((cur - projectedStart) / beatDuration) + 1
-      if (num > beatsPerBar) num = beatsPerBar
-    }
-    return num < 1 ? 1 : num
-  }, [currentTrack, mainCurrentTime])
-
   const beat1Times = useMemo(() => {
-    if (!currentTrack || currentTrack.beat1Phase === undefined || currentTrack.beat1Interval === undefined || currentTrack.beat1Interval <= 0) {
+    if (!currentTrack || !currentTrack.beatPairs || currentTrack.beatPairs.length === 0) {
       return []
     }
-    const phase = currentTrack.beat1Phase
-    const interval = currentTrack.beat1Interval
     const dur = mainDuration || currentTrack.durationSec || 120
+    const pairs = [...currentTrack.beatPairs].sort((a, b) => a.t1 - b.t1)
+
     const list: number[] = []
-    let t = phase
-    while (t < dur) {
-      list.push(t)
-      t += interval
+
+    // 1. Before the first pair (Pair 0): project backward
+    const firstPair = pairs[0]
+    const firstInterval = firstPair.t2 - firstPair.t1
+    if (firstInterval > 0) {
+      let t = firstPair.t1
+      while (t >= 0) {
+        list.unshift(t)
+        t -= firstInterval
+      }
     }
-    let tBack = phase - interval
-    while (tBack >= 0) {
-      list.unshift(tBack)
-      tBack -= interval
+
+    // 2. Loop through all pairs and transition between them
+    for (let i = 0; i < pairs.length; i++) {
+      const pair = pairs[i]
+      const pairInterval = pair.t2 - pair.t1
+      
+      // Inside the pair (contains exactly 1 bar): from t1 to t2
+      if (!list.includes(pair.t2)) {
+        list.push(pair.t2)
+      }
+
+      // Transition to next pair if it exists
+      if (i < pairs.length - 1) {
+        const nextPair = pairs[i + 1]
+        const transitionDist = nextPair.t1 - pair.t2
+        if (transitionDist > 0) {
+          const nextPairInterval = nextPair.t2 - nextPair.t1
+          const avgInterval = (pairInterval + nextPairInterval) / 2
+          const numBars = Math.max(1, Math.round(transitionDist / avgInterval))
+          const transInterval = transitionDist / numBars
+          for (let k = 1; k < numBars; k++) {
+            list.push(pair.t2 + k * transInterval)
+          }
+        }
+        if (!list.includes(nextPair.t1)) {
+          list.push(nextPair.t1)
+        }
+      }
     }
-    return list
+
+    // 3. After the last pair: project forward
+    const lastPair = pairs[pairs.length - 1]
+    const lastInterval = lastPair.t2 - lastPair.t1
+    if (lastInterval > 0) {
+      let t = lastPair.t2 + lastInterval
+      while (t < dur) {
+        list.push(t)
+        t += lastInterval
+      }
+    }
+
+    // Return unique sorted timestamps
+    return Array.from(new Set(list)).sort((a, b) => a - b)
   }, [currentTrack, mainDuration])
+
+  const currentBeatNum = useMemo(() => {
+    if (!currentTrack || beat1Times.length === 0) {
+      return null
+    }
+    const cur = mainCurrentTime || 0
+    const beatsPerBar = BEATS_PER_BAR[currentTrack.danceType] || 4
+
+    let barStart = beat1Times[0]
+    let barEnd = beat1Times[1] ?? (barStart + 2.0)
+    
+    if (cur < beat1Times[0]) {
+      const interval = (beat1Times[1] ?? (beat1Times[0] + 2.0)) - beat1Times[0]
+      const elapsed = beat1Times[0] - cur
+      const barsBefore = Math.ceil(elapsed / interval)
+      barStart = beat1Times[0] - barsBefore * interval
+      barEnd = barStart + interval
+    } else {
+      let found = false
+      for (let i = 0; i < beat1Times.length - 1; i++) {
+        if (cur >= beat1Times[i] && cur < beat1Times[i+1]) {
+          barStart = beat1Times[i]
+          barEnd = beat1Times[i+1]
+          found = true
+          break
+        }
+      }
+      if (!found) {
+        const lastIdx = beat1Times.length - 1
+        const interval = beat1Times[lastIdx] - (beat1Times[lastIdx - 1] ?? (beat1Times[lastIdx] - 2.0))
+        const elapsed = cur - beat1Times[lastIdx]
+        const barsAfter = Math.floor(elapsed / interval)
+        barStart = beat1Times[lastIdx] + barsAfter * interval
+        barEnd = barStart + interval
+      }
+    }
+
+    const interval = barEnd - barStart
+    const elapsedInBar = cur - barStart
+    const beatDuration = interval / beatsPerBar
+    let num = Math.floor(elapsedInBar / beatDuration) + 1
+    if (num > beatsPerBar) num = beatsPerBar
+    if (num < 1) num = 1
+    return num
+  }, [currentTrack, mainCurrentTime, beat1Times])
 
   // Media Session API integration
   useEffect(() => {
@@ -1647,71 +1709,28 @@ function App() {
     const audio = audioRef.current
     if (!audio || !currentTrack) return
     const curTime = audio.currentTime
-    const newTaps = [...tapTimes, curTime].sort((a, b) => a - b)
-    setTapTimes(newTaps)
-
     const latencySec = (settings.tapLatencyMs ?? 100) / 1000
-    const adjustedTaps = newTaps.map(t => t - latencySec)
 
-    if (adjustedTaps.length >= 2) {
-      const minBpm = WDSF_2025_BPM_RANGES[currentTrack.danceType]?.min ?? 20
-      const maxBpm = WDSF_2025_BPM_RANGES[currentTrack.danceType]?.max ?? 200
-      const midBpm = (minBpm + maxBpm) / 2
-      const expectedBarDur = 60 / midBpm
+    const lastTap = tapTimes[tapTimes.length - 1]
+    const isSecondOfPair = lastTap !== undefined && (curTime - lastTap) < 5.0
 
-      // Determine bar indices relative to the first tap
-      // Dynamically update the estimated bar duration to handle taps at different stages of the song
-      let currentEstBarDur = expectedBarDur
-      const barIndices = [0]
-      for (let i = 1; i < adjustedTaps.length; i++) {
-        const diff = adjustedTaps[i] - adjustedTaps[i - 1]
-        const numBars = Math.max(1, Math.round(diff / currentEstBarDur))
-        const nextIndex = barIndices[i - 1] + numBars
-        barIndices.push(nextIndex)
-        currentEstBarDur = (adjustedTaps[i] - adjustedTaps[0]) / nextIndex
+    if (isSecondOfPair) {
+      const newPair: BeatPair = {
+        t1: lastTap - latencySec,
+        t2: curTime - latencySec
       }
-
-      // Perform linear regression: y = slope * x + intercept
-      // y is adjustedTaps, x is barIndices
-      const n = adjustedTaps.length
-      let sumX = 0
-      let sumY = 0
-      for (let i = 0; i < n; i++) {
-        sumX += barIndices[i]
-        sumY += adjustedTaps[i]
-      }
-      const meanX = sumX / n
-      const meanY = sumY / n
-
-      let num = 0
-      let den = 0
-      for (let i = 0; i < n; i++) {
-        num += (barIndices[i] - meanX) * (adjustedTaps[i] - meanY)
-        den += (barIndices[i] - meanX) * (barIndices[i] - meanX)
-      }
-
-      let calculatedInterval = expectedBarDur
-      let calculatedPhase = adjustedTaps[0]
-
-      if (den > 0) {
-        calculatedInterval = num / den
-        calculatedPhase = meanY - calculatedInterval * meanX
-      }
-
-      // Normalize calculatedPhase to be positive and within [0, calculatedInterval)
-      if (calculatedInterval > 0) {
-        calculatedPhase = ((calculatedPhase % calculatedInterval) + calculatedInterval) % calculatedInterval
-      }
-
+      setTapTimes([])
+      const existingPairs = currentTrack.beatPairs ?? []
+      const updatedPairs = [...existingPairs, newPair].sort((a, b) => a.t1 - b.t1)
       updateTrack(currentTrack.id, {
-        beat1Phase: calculatedPhase,
-        beat1Interval: calculatedInterval
+        beatPairs: updatedPairs
       })
-
-      const calculatedBpm = Math.round(60 / calculatedInterval)
-      setStatus(`Aligned Beat 1 using ${n} taps! Estimated: ${calculatedBpm} Bars/Min (${Math.round(calculatedBpm * BEATS_PER_BAR[currentTrack.danceType])} BPM).`)
+      const pairInterval = newPair.t2 - newPair.t1
+      const calculatedBpm = Math.round(60 / pairInterval)
+      setStatus(`Beat Pair registered! Local tempo: ${calculatedBpm} Bars/Min (${Math.round(calculatedBpm * BEATS_PER_BAR[currentTrack.danceType])} BPM).`)
     } else {
-      setStatus(`Tapped Beat 1 at ${formatTime(curTime)}. Keep tapping to improve timing precision.`)
+      setTapTimes([curTime])
+      setStatus("First tap of Beat 1 pair recorded. Tap on the next Beat 1 to align this section.")
     }
   }
 
@@ -1719,8 +1738,7 @@ function App() {
     if (!currentTrack) return
     setTapTimes([])
     updateTrack(currentTrack.id, {
-      beat1Phase: undefined,
-      beat1Interval: undefined
+      beatPairs: []
     })
     setStatus('Beat alignment reset.')
   }
@@ -2538,7 +2556,7 @@ function App() {
                         >
                           🥁 Tap Beat 1 ({tapTimes.length} tapped)
                         </button>
-                        {currentTrack.beat1Phase !== undefined && (
+                        {currentTrack.beatPairs && currentTrack.beatPairs.length > 0 && (
                           <button
                             type="button"
                             onClick={handleResetBeats}
@@ -2555,6 +2573,77 @@ function App() {
                             ✕ Reset
                           </button>
                         )}
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const audio = audioRef.current
+                            if (audio) {
+                              const cue = currentTrack.cueStartSec || 0
+                              audio.currentTime = cue
+                              setMainCurrentTime(cue)
+                            }
+                          }}
+                          style={{
+                            flex: 1,
+                            background: 'rgba(255,255,255,0.08)',
+                            color: '#fff',
+                            border: '1px solid rgba(255,255,255,0.15)',
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                            cursor: 'pointer',
+                            fontSize: '0.72rem'
+                          }}
+                        >
+                          ⏮ Jump Start
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const audio = audioRef.current
+                            if (audio) {
+                              const mid = dur * 0.5
+                              audio.currentTime = mid
+                              setMainCurrentTime(mid)
+                            }
+                          }}
+                          style={{
+                            flex: 1,
+                            background: 'rgba(255,255,255,0.08)',
+                            color: '#fff',
+                            border: '1px solid rgba(255,255,255,0.15)',
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                            cursor: 'pointer',
+                            fontSize: '0.72rem'
+                          }}
+                        >
+                          ⏯ Jump Mid
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const audio = audioRef.current
+                            if (audio) {
+                              const end = dur * 0.9
+                              audio.currentTime = end
+                              setMainCurrentTime(end)
+                            }
+                          }}
+                          style={{
+                            flex: 1,
+                            background: 'rgba(255,255,255,0.08)',
+                            color: '#fff',
+                            border: '1px solid rgba(255,255,255,0.15)',
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                            cursor: 'pointer',
+                            fontSize: '0.72rem'
+                          }}
+                        >
+                          ⏭ Jump End
+                        </button>
                       </div>
                     </div>
                   )
@@ -2694,7 +2783,7 @@ function App() {
                         >
                           🥁 Tap Beat 1 ({tapTimes.length} tapped)
                         </button>
-                        {currentTrack.beat1Phase !== undefined && (
+                        {currentTrack.beatPairs && currentTrack.beatPairs.length > 0 && (
                           <button
                             type="button"
                             onClick={handleResetBeats}
@@ -2711,6 +2800,77 @@ function App() {
                             ✕ Reset
                           </button>
                         )}
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const audio = audioRef.current
+                            if (audio) {
+                              const cue = currentTrack.cueStartSec || 0
+                              audio.currentTime = cue
+                              setMainCurrentTime(cue)
+                            }
+                          }}
+                          style={{
+                            flex: 1,
+                            background: 'rgba(255,255,255,0.08)',
+                            color: '#fff',
+                            border: '1px solid rgba(255,255,255,0.15)',
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                            cursor: 'pointer',
+                            fontSize: '0.72rem'
+                          }}
+                        >
+                          ⏮ Jump Start
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const audio = audioRef.current
+                            if (audio) {
+                              const mid = dur * 0.5
+                              audio.currentTime = mid
+                              setMainCurrentTime(mid)
+                            }
+                          }}
+                          style={{
+                            flex: 1,
+                            background: 'rgba(255,255,255,0.08)',
+                            color: '#fff',
+                            border: '1px solid rgba(255,255,255,0.15)',
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                            cursor: 'pointer',
+                            fontSize: '0.72rem'
+                          }}
+                        >
+                          ⏯ Jump Mid
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const audio = audioRef.current
+                            if (audio) {
+                              const end = dur * 0.9
+                              audio.currentTime = end
+                              setMainCurrentTime(end)
+                            }
+                          }}
+                          style={{
+                            flex: 1,
+                            background: 'rgba(255,255,255,0.08)',
+                            color: '#fff',
+                            border: '1px solid rgba(255,255,255,0.15)',
+                            borderRadius: '6px',
+                            padding: '4px 8px',
+                            cursor: 'pointer',
+                            fontSize: '0.72rem'
+                          }}
+                        >
+                          ⏭ Jump End
+                        </button>
                       </div>
                     </div>
                   )
