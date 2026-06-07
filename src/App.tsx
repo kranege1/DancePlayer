@@ -1091,8 +1091,8 @@ function App() {
         if (time >= tMin && time <= tMax) {
           const x = ((time - tMin) / windowDuration) * w
           const isRegistered = currentTrack.beatPairs?.some(
-            pair => Math.abs(time - pair.t1) < 0.001 || Math.abs(time - pair.t2) < 0.001
-          ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.001)
+            pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
+          ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)
 
           ctx.strokeStyle = isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.4)'
           ctx.lineWidth = isRegistered ? 2 : 1
@@ -3194,8 +3194,8 @@ function App() {
                             {beat1Times.map((time, idx) => {
                               const pct = (time / dur) * 100
                               const isRegistered = currentTrack.beatPairs?.some(
-                                pair => Math.abs(time - pair.t1) < 0.001 || Math.abs(time - pair.t2) < 0.001
-                              )
+                                pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
+                              ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)
                               if (!isRegistered) return null
                               return (
                                 <div
