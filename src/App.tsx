@@ -396,6 +396,7 @@ function App() {
   const zoomCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const zoomBeatPillRef = useRef<HTMLDivElement | null>(null)
   const zoomAnimationFrameRef = useRef<number | null>(null)
+  const dancerCountSpansRef = useRef<(HTMLSpanElement | null)[]>([])
   const [isPlaying, setIsPlaying] = useState(false)
   const sessionRuleRef = useRef<SessionRule>(initialSessionRule)
   sessionRuleRef.current = sessionRule
@@ -953,6 +954,106 @@ function App() {
         } else {
           zoomBeatPillRef.current.style.display = 'none'
         }
+      }
+
+      // Update the Dancer Count Span Elements in perfect sync
+      if (activeBeat && dancerCountSpansRef.current.length > 0) {
+        const curBeatNum = activeBeat.num
+        const { barStart, barEnd, beatDuration } = activeBeat
+        const elapsedInBar = cur - barStart
+        const beatProgress = (elapsedInBar / beatDuration) - (curBeatNum - 1)
+        const dance = currentTrack.danceType
+
+        let activeIdx = -1
+
+        if (dance === 'ChaCha') {
+          if (curBeatNum === 1) {
+            activeIdx = 4
+          } else if (curBeatNum === 2) {
+            activeIdx = 0
+          } else if (curBeatNum === 3) {
+            activeIdx = 1
+          } else if (curBeatNum === 4) {
+            if (beatProgress < 0.5) {
+              activeIdx = 2
+            } else {
+              activeIdx = 3
+            }
+          }
+        } else if (dance === 'Rumba') {
+          if (curBeatNum === 1) {
+            activeIdx = 3
+          } else if (curBeatNum === 2) {
+            activeIdx = 0
+          } else if (curBeatNum === 3) {
+            activeIdx = 1
+          } else if (curBeatNum === 4) {
+            activeIdx = 2
+          }
+        } else if (dance === 'Samba') {
+          if (curBeatNum === 1) {
+            if (beatProgress < 0.75) {
+              activeIdx = 0
+            } else {
+              activeIdx = 1
+            }
+          } else if (curBeatNum === 2) {
+            if (beatProgress < 0.75) {
+              activeIdx = 2
+            } else {
+              activeIdx = 3
+            }
+          }
+        } else if (dance === 'Jive') {
+          const absoluteBeatIndex = Math.floor((cur - beat1Times[0]) / beatDuration)
+          const jiveBeatIndex = ((absoluteBeatIndex % 6) + 6) % 6
+          const jiveProgress = (cur - beat1Times[0]) / beatDuration - absoluteBeatIndex
+          if (jiveBeatIndex === 0) {
+            activeIdx = 0
+          } else if (jiveBeatIndex === 1) {
+            activeIdx = 1
+          } else if (jiveBeatIndex === 2) {
+            if (jiveProgress < 0.5) {
+              activeIdx = 2
+            } else {
+              activeIdx = 3
+            }
+          } else if (jiveBeatIndex === 3) {
+            activeIdx = 4
+          } else if (jiveBeatIndex === 4) {
+            if (jiveProgress < 0.5) {
+              activeIdx = 5
+            } else {
+              activeIdx = 6
+            }
+          } else if (jiveBeatIndex === 5) {
+            activeIdx = 7
+          }
+        } else if (dance === 'Waltz' || dance === 'Viennese Waltz') {
+          activeIdx = curBeatNum - 1
+        } else if (dance === 'Foxtrot' || dance === 'Quickstep') {
+          if (curBeatNum === 1 || curBeatNum === 2) {
+            activeIdx = 0
+          } else if (curBeatNum === 3) {
+            activeIdx = 1
+          } else if (curBeatNum === 4) {
+            activeIdx = 2
+          }
+        } else if (dance === 'Paso Doble') {
+          const barIndex = Math.round((barStart - beat1Times[0]) / (barEnd - barStart))
+          activeIdx = (((barIndex % 4) + 4) % 4) * 2 + (curBeatNum - 1)
+        } else {
+          activeIdx = curBeatNum - 1
+        }
+
+        dancerCountSpansRef.current.forEach((span, idx) => {
+          if (span) {
+            const isActive = idx === activeIdx
+            span.style.color = isActive ? '#ff7043' : '#6f8a99'
+            span.style.textShadow = isActive ? '0 0 6px rgba(255, 112, 67, 0.4)' : 'none'
+            span.style.borderBottom = '2px solid ' + (isActive ? '#ff7043' : 'transparent')
+          }
+        })
       }
 
       // Draw colored background beat rectangles
@@ -3010,23 +3111,30 @@ function App() {
                   borderRadius: '8px',
                   border: '1px solid rgba(255,255,255,0.05)',
                   fontSize: '0.8rem',
-                  marginTop: '2px'
+                  marginTop: '2px',
+                  height: '34px',
+                  boxSizing: 'border-box'
                 }}>
-                  <span style={{ color: '#a0b2bd' }}>Zählweise der Tänzer:</span>
+                  <span style={{ color: '#a0b2bd' }}>Dancer Count:</span>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                     {dancerCountInfo.pattern.map((tok, idx) => {
                       const isActive = idx === dancerCountInfo.activeIndex;
                       return (
                         <span
                           key={idx}
+                          ref={el => { dancerCountSpansRef.current[idx] = el; }}
                           style={{
                             fontWeight: 'bold',
                             color: isActive ? '#ff7043' : '#6f8a99',
-                            fontSize: isActive ? '1.05rem' : '0.82rem',
+                            fontSize: '0.9rem',
                             textShadow: isActive ? '0 0 6px rgba(255, 112, 67, 0.4)' : 'none',
                             transition: 'all 0.08s ease',
-                            padding: '0 2px',
-                            borderBottom: isActive ? '2px solid #ff7043' : 'none'
+                            padding: '2px 4px',
+                            borderBottom: '2px solid ' + (isActive ? '#ff7043' : 'transparent'),
+                            boxSizing: 'border-box',
+                            display: 'inline-block',
+                            textAlign: 'center',
+                            minWidth: '16px'
                           }}
                         >
                           {tok}
