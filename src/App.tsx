@@ -2073,12 +2073,57 @@ function App() {
     setSettings((prev) => ({ ...prev, speedPct: clampSpeed(prev.speedPct + delta) }))
   }
 
+  function findWavePeak(t: number): number {
+    const audioBuffer = decodedAudioBufferRef.current
+    if (!audioBuffer) {
+      const latencySec = (settings.tapLatencyMs ?? 100) / 1000
+      return t - latencySec
+    }
+    
+    try {
+      const channelData = audioBuffer.getChannelData(0)
+      const sampleRate = audioBuffer.sampleRate
+      
+      // Look in a 400ms window: t - 350ms to t + 50ms
+      const startSec = t - 0.35
+      const endSec = t + 0.05
+      
+      const startSample = Math.max(0, Math.floor(startSec * sampleRate))
+      const endSample = Math.min(channelData.length - 1, Math.floor(endSec * sampleRate))
+      
+      const chunkSize = Math.floor(0.005 * sampleRate) // 5ms chunks
+      let maxEnergy = -1
+      let peakTime = t - 0.15 // fallback
+      
+      for (let i = startSample; i < endSample; i += chunkSize) {
+        let sum = 0
+        const count = Math.min(chunkSize, endSample - i)
+        if (count <= 0) break
+        
+        for (let j = 0; j < count; j++) {
+          sum += Math.abs(channelData[i + j])
+        }
+        const avg = sum / count
+        if (avg > maxEnergy) {
+          maxEnergy = avg
+          peakTime = (i + count / 2) / sampleRate
+        }
+      }
+      
+      console.log(`Snapped tap time ${t.toFixed(3)}s to peak at ${peakTime.toFixed(3)}s (diff: ${((t - peakTime)*1000).toFixed(0)}ms)`)
+      return peakTime
+    } catch (err) {
+      console.error('Failed to find wave peak:', err)
+      const latencySec = (settings.tapLatencyMs ?? 100) / 1000
+      return t - latencySec
+    }
+  }
+
   function handleTapBeat1() {
     if (!currentTrack) return
     const audio = audioRef.current
     if (!audio) return
     const curTime = audio.currentTime
-    const latencySec = (settings.tapLatencyMs ?? 100) / 1000
 
     const hasNoPairs = !currentTrack.beatPairs || currentTrack.beatPairs.length === 0
 
@@ -2087,9 +2132,11 @@ function App() {
       const isSecondOfPair = lastTap !== undefined && (curTime - lastTap) < 5.0
 
       if (isSecondOfPair) {
+        const t1Snapped = findWavePeak(lastTap)
+        const t2Snapped = findWavePeak(curTime)
         const newPair: BeatPair = {
-          t1: lastTap - latencySec,
-          t2: curTime - latencySec
+          t1: t1Snapped,
+          t2: t2Snapped
         }
         setTapTimes([])
         updateTrack(currentTrack.id, {
@@ -2104,7 +2151,7 @@ function App() {
       }
     } else {
       // 3rd Tap: Align Late Beat 1
-      const lateTime = curTime - latencySec
+      const lateTime = findWavePeak(curTime)
       updateTrack(currentTrack.id, {
         lateBeatSec: lateTime
       })
