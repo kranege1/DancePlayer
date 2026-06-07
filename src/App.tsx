@@ -698,11 +698,13 @@ function App() {
     const beatProgress = (elapsedInBar % beatDuration) / beatDuration
 
     let pattern: string[] = []
+    let weights: number[] = []
     let activeIndex = 0
     let activeLabel = ''
 
     if (dance === 'ChaCha') {
       pattern = ['2', '3', '4', '&', '1']
+      weights = [1.0, 1.0, 0.5, 0.5, 1.0]
       if (currentBeatNum === 1) {
         activeIndex = 4
       } else if (currentBeatNum === 2) {
@@ -719,6 +721,7 @@ function App() {
       activeLabel = pattern[activeIndex]
     } else if (dance === 'Rumba') {
       pattern = ['2', '3', '4', '1']
+      weights = [1.0, 1.0, 1.0, 1.0]
       if (currentBeatNum === 1) {
         activeIndex = 3
       } else if (currentBeatNum === 2) {
@@ -730,7 +733,8 @@ function App() {
       }
       activeLabel = pattern[activeIndex]
     } else if (dance === 'Samba') {
-      pattern = ['1', 'a', '2', 'a']
+      pattern = ['1', 'a', '2']
+      weights = [0.75, 0.25, 1.0]
       if (currentBeatNum === 1) {
         if (beatProgress < 0.75) {
           activeIndex = 0
@@ -738,15 +742,12 @@ function App() {
           activeIndex = 1
         }
       } else if (currentBeatNum === 2) {
-        if (beatProgress < 0.75) {
-          activeIndex = 2
-        } else {
-          activeIndex = 3
-        }
+        activeIndex = 2
       }
       activeLabel = pattern[activeIndex]
     } else if (dance === 'Jive') {
       pattern = ['1', '2', '3', '&', '4', '5', '&', '6']
+      weights = [1.0, 1.0, 0.5, 0.5, 1.0, 0.5, 0.5, 1.0]
       const absoluteBeatIndex = Math.floor((cur - beat1Times[0]) / beatDuration)
       const jiveBeatIndex = ((absoluteBeatIndex % 6) + 6) % 6
       if (jiveBeatIndex === 0) {
@@ -773,10 +774,12 @@ function App() {
       activeLabel = pattern[activeIndex]
     } else if (dance === 'Waltz' || dance === 'Viennese Waltz') {
       pattern = ['1', '2', '3']
+      weights = [1.0, 1.0, 1.0]
       activeIndex = currentBeatNum - 1
       activeLabel = pattern[activeIndex]
     } else if (dance === 'Foxtrot' || dance === 'Quickstep') {
       pattern = ['Slow', 'Quick', 'Quick']
+      weights = [2.0, 1.0, 1.0]
       if (currentBeatNum === 1 || currentBeatNum === 2) {
         activeIndex = 0
       } else if (currentBeatNum === 3) {
@@ -787,16 +790,18 @@ function App() {
       activeLabel = pattern[activeIndex]
     } else if (dance === 'Paso Doble') {
       pattern = ['1', '2', '3', '4', '5', '6', '7', '8']
+      weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
       const pasoBeatIndex = (((barIndex % 4) + 4) % 4) * 2 + (currentBeatNum - 1)
       activeIndex = pasoBeatIndex
       activeLabel = pattern[activeIndex]
     } else {
       pattern = Array.from({ length: beatsPerBar }, (_, i) => String(i + 1))
+      weights = Array.from({ length: beatsPerBar }, () => 1.0)
       activeIndex = currentBeatNum - 1
       activeLabel = pattern[activeIndex]
     }
 
-    return { pattern, activeIndex, activeLabel }
+    return { pattern, weights, activeIndex, activeLabel }
   }, [currentTrack, mainCurrentTime, beat1Times, currentBeatNum])
 
   // Media Session API integration
@@ -998,11 +1003,7 @@ function App() {
               activeIdx = 1
             }
           } else if (curBeatNum === 2) {
-            if (beatProgress < 0.75) {
-              activeIdx = 2
-            } else {
-              activeIdx = 3
-            }
+            activeIdx = 2
           }
         } else if (dance === 'Jive') {
           const absoluteBeatIndex = Math.floor((cur - beat1Times[0]) / beatDuration)
@@ -1052,6 +1053,12 @@ function App() {
             span.style.color = isActive ? '#ff7043' : '#6f8a99'
             span.style.textShadow = isActive ? '0 0 6px rgba(255, 112, 67, 0.4)' : 'none'
             span.style.borderBottom = '2px solid ' + (isActive ? '#ff7043' : 'transparent')
+            
+            const nextBar = span.nextSibling as HTMLDivElement
+            if (nextBar) {
+              nextBar.style.background = isActive ? '#ff7043' : 'rgba(255,255,255,0.1)'
+              nextBar.style.opacity = isActive ? '1.0' : '0.4'
+            }
           }
         })
       }
@@ -3112,33 +3119,53 @@ function App() {
                   border: '1px solid rgba(255,255,255,0.05)',
                   fontSize: '0.8rem',
                   marginTop: '2px',
-                  height: '34px',
+                  height: '38px', // slightly taller to host duration bars
                   boxSizing: 'border-box'
                 }}>
-                  <span style={{ color: '#a0b2bd' }}>Dancer Count:</span>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <span style={{ color: '#a0b2bd', marginRight: '8px' }}>Dancer Count:</span>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flex: 1, justifyContent: 'flex-end', maxWidth: '300px' }}>
                     {dancerCountInfo.pattern.map((tok, idx) => {
                       const isActive = idx === dancerCountInfo.activeIndex;
+                      const weight = dancerCountInfo.weights[idx] || 1.0;
                       return (
-                        <span
+                        <div
                           key={idx}
-                          ref={el => { dancerCountSpansRef.current[idx] = el; }}
                           style={{
-                            fontWeight: 'bold',
-                            color: isActive ? '#ff7043' : '#6f8a99',
-                            fontSize: '0.9rem',
-                            textShadow: isActive ? '0 0 6px rgba(255, 112, 67, 0.4)' : 'none',
-                            transition: 'all 0.08s ease',
-                            padding: '2px 4px',
-                            borderBottom: '2px solid ' + (isActive ? '#ff7043' : 'transparent'),
-                            boxSizing: 'border-box',
-                            display: 'inline-block',
-                            textAlign: 'center',
-                            minWidth: '16px'
+                            flex: weight,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            gap: '2px'
                           }}
                         >
-                          {tok}
-                        </span>
+                          <span
+                            ref={el => { dancerCountSpansRef.current[idx] = el; }}
+                            style={{
+                              fontWeight: 'bold',
+                              color: isActive ? '#ff7043' : '#6f8a99',
+                              fontSize: '0.9rem',
+                              textShadow: isActive ? '0 0 6px rgba(255, 112, 67, 0.4)' : 'none',
+                              transition: 'all 0.08s ease',
+                              padding: '2px 4px',
+                              borderBottom: '2px solid ' + (isActive ? '#ff7043' : 'transparent'),
+                              boxSizing: 'border-box',
+                              display: 'inline-block',
+                              textAlign: 'center',
+                              width: '100%',
+                              minWidth: '16px'
+                            }}
+                          >
+                            {tok}
+                          </span>
+                          <div style={{
+                            height: '3px',
+                            background: isActive ? '#ff7043' : 'rgba(255,255,255,0.1)',
+                            width: '85%',
+                            borderRadius: '1.5px',
+                            opacity: isActive ? 1.0 : 0.4,
+                            transition: 'all 0.08s ease'
+                          }} />
+                        </div>
                       )
                     })}
                   </div>
@@ -4123,7 +4150,7 @@ function App() {
                     <strong>Rumba:</strong> Displays <code>2 - 3 - 4 - 1</code>.
                   </li>
                   <li>
-                    <strong>Samba:</strong> Displays <code>1 - a - 2 - a</code> (splitting beats 1 and 2 to highlight a on the bounce accent).
+                    <strong>Samba:</strong> Displays <code>1 - a - 2</code>. Timings &amp; Durations: <strong>1</strong> starts on Beat 1.0 (Duration: 0.75 beat / Dotted 8th note), <strong>a</strong> starts on Beat 1.75 (Duration: 0.25 beat / 16th note), <strong>2</strong> starts on Beat 2.0 (Duration: 1 full beat).
                   </li>
                   <li>
                     <strong>Jive:</strong> Displays the full 2-bar cycle <code>1 - 2 - 3 &amp; 4 - 5 &amp; 6</code>.
