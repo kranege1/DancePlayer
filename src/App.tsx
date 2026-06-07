@@ -649,6 +649,155 @@ function App() {
     return num
   }, [currentTrack, mainCurrentTime, beat1Times])
 
+  const dancerCountInfo = useMemo(() => {
+    if (!currentTrack || beat1Times.length === 0 || currentBeatNum === null) {
+      return null
+    }
+    const cur = mainCurrentTime || 0
+    const dance = currentTrack.danceType
+    const beatsPerBar = BEATS_PER_BAR[dance] || 4
+
+    // Calculate barIndex and beatDuration
+    let barStart = beat1Times[0]
+    let barEnd = beat1Times[1] ?? (barStart + 2.0)
+    
+    let interval = barEnd - barStart
+    let barIndex = 0
+    
+    if (cur < beat1Times[0]) {
+      const elapsed = beat1Times[0] - cur
+      const barsBefore = Math.ceil(elapsed / interval)
+      barStart = beat1Times[0] - barsBefore * interval
+      barEnd = barStart + interval
+      barIndex = -barsBefore
+    } else {
+      let found = false
+      for (let i = 0; i < beat1Times.length - 1; i++) {
+        if (cur >= beat1Times[i] && cur < beat1Times[i+1]) {
+          barStart = beat1Times[i]
+          barEnd = beat1Times[i+1]
+          interval = barEnd - barStart
+          barIndex = i
+          found = true
+          break
+        }
+      }
+      if (!found) {
+        const lastIdx = beat1Times.length - 1
+        const elapsed = cur - beat1Times[lastIdx]
+        const barsAfter = Math.floor(elapsed / interval)
+        barStart = beat1Times[lastIdx] + barsAfter * interval
+        barEnd = barStart + interval
+        barIndex = lastIdx + barsAfter
+      }
+    }
+
+    const elapsedInBar = cur - barStart
+    const beatDuration = interval / beatsPerBar
+    const beatProgress = (elapsedInBar % beatDuration) / beatDuration
+
+    let pattern: string[] = []
+    let activeIndex = 0
+    let activeLabel = ''
+
+    if (dance === 'ChaCha') {
+      pattern = ['2', '3', '4', '&', '1']
+      if (currentBeatNum === 1) {
+        activeIndex = 4
+      } else if (currentBeatNum === 2) {
+        activeIndex = 0
+      } else if (currentBeatNum === 3) {
+        activeIndex = 1
+      } else if (currentBeatNum === 4) {
+        if (beatProgress < 0.5) {
+          activeIndex = 2
+        } else {
+          activeIndex = 3
+        }
+      }
+      activeLabel = pattern[activeIndex]
+    } else if (dance === 'Rumba') {
+      pattern = ['2', '3', '4', '1']
+      if (currentBeatNum === 1) {
+        activeIndex = 3
+      } else if (currentBeatNum === 2) {
+        activeIndex = 0
+      } else if (currentBeatNum === 3) {
+        activeIndex = 1
+      } else if (currentBeatNum === 4) {
+        activeIndex = 2
+      }
+      activeLabel = pattern[activeIndex]
+    } else if (dance === 'Samba') {
+      pattern = ['1', 'a', '2', 'a']
+      if (currentBeatNum === 1) {
+        if (beatProgress < 0.75) {
+          activeIndex = 0
+        } else {
+          activeIndex = 1
+        }
+      } else if (currentBeatNum === 2) {
+        if (beatProgress < 0.75) {
+          activeIndex = 2
+        } else {
+          activeIndex = 3
+        }
+      }
+      activeLabel = pattern[activeIndex]
+    } else if (dance === 'Jive') {
+      pattern = ['1', '2', '3', '&', '4', '5', '&', '6']
+      const absoluteBeatIndex = Math.floor((cur - beat1Times[0]) / beatDuration)
+      const jiveBeatIndex = ((absoluteBeatIndex % 6) + 6) % 6
+      if (jiveBeatIndex === 0) {
+        activeIndex = 0
+      } else if (jiveBeatIndex === 1) {
+        activeIndex = 1
+      } else if (jiveBeatIndex === 2) {
+        if (beatProgress < 0.5) {
+          activeIndex = 2
+        } else {
+          activeIndex = 3
+        }
+      } else if (jiveBeatIndex === 3) {
+        activeIndex = 4
+      } else if (jiveBeatIndex === 4) {
+        if (beatProgress < 0.5) {
+          activeIndex = 5
+        } else {
+          activeIndex = 6
+        }
+      } else if (jiveBeatIndex === 5) {
+        activeIndex = 7
+      }
+      activeLabel = pattern[activeIndex]
+    } else if (dance === 'Waltz' || dance === 'Viennese Waltz') {
+      pattern = ['1', '2', '3']
+      activeIndex = currentBeatNum - 1
+      activeLabel = pattern[activeIndex]
+    } else if (dance === 'Foxtrot' || dance === 'Quickstep') {
+      pattern = ['Slow', 'Quick', 'Quick']
+      if (currentBeatNum === 1 || currentBeatNum === 2) {
+        activeIndex = 0
+      } else if (currentBeatNum === 3) {
+        activeIndex = 1
+      } else if (currentBeatNum === 4) {
+        activeIndex = 2
+      }
+      activeLabel = pattern[activeIndex]
+    } else if (dance === 'Paso Doble') {
+      pattern = ['1', '2', '3', '4', '5', '6', '7', '8']
+      const pasoBeatIndex = (((barIndex % 4) + 4) % 4) * 2 + (currentBeatNum - 1)
+      activeIndex = pasoBeatIndex
+      activeLabel = pattern[activeIndex]
+    } else {
+      pattern = Array.from({ length: beatsPerBar }, (_, i) => String(i + 1))
+      activeIndex = currentBeatNum - 1
+      activeLabel = pattern[activeIndex]
+    }
+
+    return { pattern, activeIndex, activeLabel }
+  }, [currentTrack, mainCurrentTime, beat1Times, currentBeatNum])
+
   // Media Session API integration
   useEffect(() => {
     if (!('mediaSession' in navigator)) return
@@ -2847,6 +2996,44 @@ function App() {
               ) : (
                 <div className="now-playing-strip now-playing-empty" style={{ background: 'rgba(255,255,255,0.03)', border: '1px dashed rgba(255,255,255,0.1)', color: '#8a9aa3', display: 'flex', justifyContent: 'center', alignItems: 'center', padding: '12px' }}>
                   No track playing
+                </div>
+              )}
+
+              {/* Dancer's Count Display */}
+              {currentTrack && dancerCountInfo && (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  background: 'rgba(0,0,0,0.2)',
+                  padding: '6px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid rgba(255,255,255,0.05)',
+                  fontSize: '0.8rem',
+                  marginTop: '2px'
+                }}>
+                  <span style={{ color: '#a0b2bd' }}>Zählweise der Tänzer:</span>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    {dancerCountInfo.pattern.map((tok, idx) => {
+                      const isActive = idx === dancerCountInfo.activeIndex;
+                      return (
+                        <span
+                          key={idx}
+                          style={{
+                            fontWeight: 'bold',
+                            color: isActive ? '#ff7043' : '#6f8a99',
+                            fontSize: isActive ? '1.05rem' : '0.82rem',
+                            textShadow: isActive ? '0 0 6px rgba(255, 112, 67, 0.4)' : 'none',
+                            transition: 'all 0.08s ease',
+                            padding: '0 2px',
+                            borderBottom: isActive ? '2px solid #ff7043' : 'none'
+                          }}
+                        >
+                          {tok}
+                        </span>
+                      )
+                    })}
+                  </div>
                 </div>
               )}
 
