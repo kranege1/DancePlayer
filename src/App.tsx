@@ -3390,8 +3390,8 @@ function App() {
                             {beat1Times.map((time, idx) => {
                               const pct = (time / dur) * 100
                               const isRegistered = currentTrack.beatPairs?.some(
-                                pair => Math.abs(time - pair.t1) < 0.001 || Math.abs(time - pair.t2) < 0.001
-                              )
+                                pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
+                              ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)
                               if (!isRegistered) return null
                               return (
                                 <div
