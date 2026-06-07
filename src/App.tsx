@@ -392,7 +392,7 @@ function App() {
   const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>(() => persistedState.savedPlaylists ?? [])
   const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('songs')
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null)
-  const [zoomBarsCount] = useState(5)
+  const [zoomBarsCount] = useState(3)
   const zoomCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const zoomBeatPillRef = useRef<HTMLDivElement | null>(null)
   const zoomAnimationFrameRef = useRef<number | null>(null)
