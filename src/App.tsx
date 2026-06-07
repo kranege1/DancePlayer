@@ -674,6 +674,7 @@ function App() {
     if (!currentTrack) {
       setCurrentWaveform(null)
       setZoomWaveform(null)
+      decodedAudioBufferRef.current = null
       return
     }
 
@@ -693,7 +694,7 @@ function App() {
     return () => {
       active = false
     }
-  }, [currentTrack])
+  }, [currentTrack?.id])
 
   useEffect(() => {
     if (!currentTrack) {
@@ -1796,25 +1797,32 @@ function App() {
       setCurrentWaveform(null)
       setZoomWaveform(null)
       decodedAudioBufferRef.current = null
+      
       const arrayBuffer = await file.arrayBuffer()
       const offlineCtx = new OfflineAudioContext(1, 44100, 44100)
       const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer)
       decodedAudioBufferRef.current = audioBuffer
       
       const rawData = audioBuffer.getChannelData(0)
+      const len = rawData.length
+      
+      // Step stride of 16 reduces main thread block by 16x
+      const stride = 16
 
       // 1. Normal Waveform (180 samples)
       const samples = 180
-      const blockSize = Math.floor(rawData.length / samples)
+      const blockSize = Math.floor(len / samples)
       const peaks: number[] = []
       for (let i = 0; i < samples; i++) {
-        let blockStart = blockSize * i
+        const blockStart = blockSize * i
+        const limit = Math.min(blockStart + blockSize, len)
         let sum = 0
-        const limit = Math.min(blockStart + blockSize, rawData.length)
-        for (let j = blockStart; j < limit; j++) {
+        let count = 0
+        for (let j = blockStart; j < limit; j += stride) {
           sum += Math.abs(rawData[j])
+          count++
         }
-        peaks.push(sum / (limit - blockStart || 1))
+        peaks.push(sum / (count || 1))
       }
       const max = Math.max(...peaks)
       const normalized = peaks.map(p => max > 0 ? Math.pow(p / max, 1.8) : 0)
@@ -1822,16 +1830,18 @@ function App() {
 
       // 2. High Resolution Zoom Waveform (4000 samples)
       const zoomSamples = 4000
-      const zoomBlockSize = Math.floor(rawData.length / zoomSamples)
+      const zoomBlockSize = Math.floor(len / zoomSamples)
       const zoomPeaks: number[] = []
       for (let i = 0; i < zoomSamples; i++) {
-        let blockStart = zoomBlockSize * i
+        const blockStart = zoomBlockSize * i
+        const limit = Math.min(blockStart + zoomBlockSize, len)
         let sum = 0
-        const limit = Math.min(blockStart + zoomBlockSize, rawData.length)
-        for (let j = blockStart; j < limit; j++) {
+        let count = 0
+        for (let j = blockStart; j < limit; j += stride) {
           sum += Math.abs(rawData[j])
+          count++
         }
-        zoomPeaks.push(sum / (limit - blockStart || 1))
+        zoomPeaks.push(sum / (count || 1))
       }
       const zoomMax = Math.max(...zoomPeaks)
       const zoomNormalized = zoomPeaks.map(p => zoomMax > 0 ? Math.pow(p / zoomMax, 1.8) : 0)
