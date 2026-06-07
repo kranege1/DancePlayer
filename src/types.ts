@@ -43,6 +43,7 @@ export interface Track {
   beatPairs?: BeatPair[]
   lateBeatSec?: number
   intervalOffsetSec?: number
+  tappedBeat1s?: number[]
 }
 
 export interface BeatPair {

@@ -208,21 +208,34 @@ function formatTime(s: number): string {
   return `${mins}:${String(secs).padStart(2, '0')}`
 }
 
+let sharedAudioCtx: AudioContext | null = null
+
+function getAudioContext(): AudioContext {
+  if (!sharedAudioCtx) {
+    sharedAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
+  }
+  return sharedAudioCtx
+}
+
 function playBeep() {
   try {
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
+    const audioCtx = getAudioContext()
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(err => console.error('Failed to resume context:', err))
+    }
     const osc = audioCtx.createOscillator()
     const gain = audioCtx.createGain()
     osc.connect(gain)
     gain.connect(audioCtx.destination)
     
-    osc.frequency.setValueAtTime(800, audioCtx.currentTime)
-    gain.gain.setValueAtTime(0, audioCtx.currentTime)
-    gain.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.01)
-    gain.gain.exponentialRampToValueAtTime(0.00001, audioCtx.currentTime + 0.12)
+    const now = audioCtx.currentTime
+    osc.frequency.setValueAtTime(800, now)
+    gain.gain.setValueAtTime(0, now)
+    gain.gain.linearRampToValueAtTime(0.3, now + 0.01)
+    gain.gain.exponentialRampToValueAtTime(0.00001, now + 0.12)
     
-    osc.start(audioCtx.currentTime)
-    osc.stop(audioCtx.currentTime + 0.12)
+    osc.start(now)
+    osc.stop(now + 0.12)
   } catch (err) {
     console.error('Failed to play calibration beep:', err)
   }
@@ -264,8 +277,8 @@ function App() {
       return 'Could not restore saved metadata.'
     }
   })
-  const [currentWaveform, setCurrentWaveform] = useState<number[] | null>(null)
   const [zoomWaveform, setZoomWaveform] = useState<number[] | null>(null)
+
 
   const [tapTimes, setTapTimes] = useState<number[]>([])
   const decodedAudioBufferRef = useRef<AudioBuffer | null>(null)
@@ -294,6 +307,24 @@ function App() {
   const calibrationTapsRef = useRef<number[]>([])
 
   function startCalibration() {
+    // Resume and warm up AudioContext inside the user gesture
+    try {
+      const audioCtx = getAudioContext()
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(e => console.error('Failed to resume in startCalibration gesture:', e))
+      }
+      // Play a short silent oscillator beep immediately to initialize/unlock Web Audio on iOS
+      const osc = audioCtx.createOscillator()
+      const gain = audioCtx.createGain()
+      gain.gain.setValueAtTime(0, audioCtx.currentTime)
+      osc.connect(gain)
+      gain.connect(audioCtx.destination)
+      osc.start(audioCtx.currentTime)
+      osc.stop(audioCtx.currentTime + 0.01)
+    } catch (err) {
+      console.error('Failed to initialize/unlock audio context on user gesture:', err)
+    }
+
     setIsCalibratingLatency(true)
     setCalibrationTaps([])
     setCalibrationResult(null)
@@ -390,7 +421,7 @@ function App() {
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null)
   const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>(() => persistedState.dancePlaylists ?? [])
   const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>(() => persistedState.savedPlaylists ?? [])
-  const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('songs')
+  const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('player')
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null)
   const [zoomBarsCount] = useState(3)
   const zoomCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -565,41 +596,75 @@ function App() {
 
   // Derived state: calculate current beat number if playing and aligned
   const beat1Times = useMemo(() => {
-    if (!currentTrack || !currentTrack.beatPairs || currentTrack.beatPairs.length === 0) {
+    if (!currentTrack) {
       return []
     }
-    const dur = mainDuration || currentTrack.durationSec || 120
-    const pairs = [...currentTrack.beatPairs].sort((a, b) => a.t1 - b.t1)
-    const lateBeat = currentTrack.lateBeatSec
-    const fineTuneOffset = currentTrack.intervalOffsetSec || 0
-
-    const list: number[] = []
-    const firstPair = pairs[0]
-
-    // Determine base interval
-    let I_base = firstPair.t2 - firstPair.t1
-
-    if (pairs.length === 1 && lateBeat !== undefined && lateBeat > firstPair.t2 && I_base > 0) {
-      const numBars = Math.round((lateBeat - firstPair.t2) / I_base)
-      if (numBars > 0) {
-        I_base = (lateBeat - firstPair.t2) / numBars
+    // Backward compatibility: build anchors from tappedBeat1s, or beatPairs + lateBeatSec
+    let anchors: number[] = []
+    if (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0) {
+      anchors = [...currentTrack.tappedBeat1s].sort((a, b) => a - b)
+    } else if (currentTrack.beatPairs && currentTrack.beatPairs.length > 0) {
+      const sortedPairs = [...currentTrack.beatPairs].sort((a, b) => a.t1 - b.t1)
+      const firstPair = sortedPairs[0]
+      anchors = [firstPair.t1, firstPair.t2]
+      if (currentTrack.lateBeatSec !== undefined) {
+        anchors.push(currentTrack.lateBeatSec)
       }
+      anchors.sort((a, b) => a - b)
     }
 
-    const I_final = I_base + fineTuneOffset
+    if (anchors.length < 2) {
+      return anchors
+    }
 
-    if (I_final > 0) {
-      // Generate uniform grid using I_final starting from firstPair.t1
-      let t = firstPair.t1
-      while (t >= 0) {
-        list.unshift(t)
-        t -= I_final
+    const dur = mainDuration || currentTrack.durationSec || 120
+    const fineTuneOffset = currentTrack.intervalOffsetSec || 0
+
+    // Reference interval based on the first two anchors
+    const I_ref = Math.max(0.1, (anchors[1] - anchors[0]) + fineTuneOffset)
+
+    const list: number[] = []
+    
+    // Add the first anchor
+    list.push(anchors[0])
+
+    // Interpolate between consecutive anchors
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const tStart = anchors[i]
+      const tEnd = anchors[i + 1]
+      const diff = tEnd - tStart
+      const numBars = Math.max(1, Math.round(diff / I_ref))
+      const I_local = diff / numBars
+
+      for (let j = 1; j < numBars; j++) {
+        list.push(tStart + j * I_local)
       }
-      t = firstPair.t1 + I_final
-      while (t < dur) {
-        list.push(t)
-        t += I_final
-      }
+      list.push(tEnd)
+    }
+
+    // Extrapolate backwards from anchors[0]
+    // Use the first segment's local interval for backward extrapolation
+    const diffFirst = anchors[1] - anchors[0]
+    const numBarsFirst = Math.max(1, Math.round(diffFirst / I_ref))
+    const I_start = diffFirst / numBarsFirst
+
+    let tPrev = anchors[0] - I_start
+    while (tPrev >= 0) {
+      list.unshift(tPrev)
+      tPrev -= I_start
+    }
+
+    // Extrapolate forwards from last anchor
+    // Use the last segment's local interval for forward extrapolation
+    const k = anchors.length - 2
+    const diffLast = anchors[k + 1] - anchors[k]
+    const numBarsLast = Math.max(1, Math.round(diffLast / I_ref))
+    const I_end = diffLast / numBarsLast
+
+    let tNext = anchors[anchors.length - 1] + I_end
+    while (tNext < dur) {
+      list.push(tNext)
+      tNext += I_end
     }
 
     return Array.from(new Set(list)).sort((a, b) => a - b)
@@ -799,7 +864,6 @@ function App() {
   useEffect(() => {
     setTapTimes([])
     if (!currentTrack) {
-      setCurrentWaveform(null)
       setZoomWaveform(null)
       decodedAudioBufferRef.current = null
       return
@@ -1090,9 +1154,11 @@ function App() {
       beat1Times.forEach((time) => {
         if (time >= tMin && time <= tMax) {
           const x = ((time - tMin) / windowDuration) * w
-          const isRegistered = currentTrack.beatPairs?.some(
-            pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
-          ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)
+          const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
+            ? currentTrack.tappedBeat1s.some(t => Math.abs(time - t) < 0.1)
+            : ((currentTrack.beatPairs?.some(
+                pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
+              ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
 
           ctx.strokeStyle = isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.4)'
           ctx.lineWidth = isRegistered ? 2 : 1
@@ -1994,7 +2060,6 @@ function App() {
 
   async function loadWaveform(file: File) {
     try {
-      setCurrentWaveform(null)
       setZoomWaveform(null)
       decodedAudioBufferRef.current = null
       
@@ -2008,25 +2073,6 @@ function App() {
       
       // Step stride of 16 reduces main thread block by 16x
       const stride = 16
-
-      // 1. Normal Waveform (180 samples)
-      const samples = 180
-      const blockSize = Math.floor(len / samples)
-      const peaks: number[] = []
-      for (let i = 0; i < samples; i++) {
-        const blockStart = blockSize * i
-        const limit = Math.min(blockStart + blockSize, len)
-        let sum = 0
-        let count = 0
-        for (let j = blockStart; j < limit; j += stride) {
-          sum += Math.abs(rawData[j])
-          count++
-        }
-        peaks.push(sum / (count || 1))
-      }
-      const max = Math.max(...peaks)
-      const normalized = peaks.map(p => max > 0 ? Math.pow(p / max, 1.8) : 0)
-      setCurrentWaveform(normalized)
 
       // 2. High Resolution Zoom Waveform (4000 samples)
       const zoomSamples = 4000
@@ -2048,7 +2094,6 @@ function App() {
       setZoomWaveform(zoomNormalized)
     } catch (err) {
       console.error('Failed to generate waveform:', err)
-      setCurrentWaveform(null)
       setZoomWaveform(null)
       decodedAudioBufferRef.current = null
     }
@@ -2335,9 +2380,20 @@ function App() {
     if (!audio) return
     const curTime = audio.currentTime
 
-    const hasNoPairs = !currentTrack.beatPairs || currentTrack.beatPairs.length === 0
+    const existingTapped = currentTrack.tappedBeat1s || []
+    
+    // Fallback/backward compatibility check: if tappedBeat1s is empty but beatPairs has elements, initialize tappedBeat1s
+    let currentTappedList = [...existingTapped]
+    if (currentTappedList.length === 0 && currentTrack.beatPairs && currentTrack.beatPairs.length > 0) {
+      const firstPair = currentTrack.beatPairs[0]
+      currentTappedList = [firstPair.t1, firstPair.t2]
+      if (currentTrack.lateBeatSec !== undefined) {
+        currentTappedList.push(currentTrack.lateBeatSec)
+      }
+      currentTappedList.sort((a, b) => a - b)
+    }
 
-    if (hasNoPairs) {
+    if (currentTappedList.length < 2) {
       const lastTap = tapTimes[tapTimes.length - 1]
       const isSecondOfPair = lastTap !== undefined && (curTime - lastTap) < 5.0
 
@@ -2348,24 +2404,42 @@ function App() {
           t1: t1Snapped,
           t2: t2Snapped
         }
+        const updatedList = [t1Snapped, t2Snapped].sort((a, b) => a - b)
         setTapTimes([])
         updateTrack(currentTrack.id, {
-          beatPairs: [newPair]
+          beatPairs: [newPair],
+          tappedBeat1s: updatedList
         })
-        const pairInterval = newPair.t2 - newPair.t1
+        const pairInterval = t2Snapped - t1Snapped
         const calculatedBpm = Math.round(60 / pairInterval)
-        setStatus(`Beat Pair registered! Local tempo: ${calculatedBpm} Bars/Min (${Math.round(calculatedBpm * BEATS_PER_BAR[currentTrack.danceType])} BPM). Now move to a later stage of the song and tap once to align.`)
+        setStatus(`Initial beat pair registered! Local tempo: ${calculatedBpm} Bars/Min (${Math.round(calculatedBpm * BEATS_PER_BAR[currentTrack.danceType])} BPM). You can now tap Beat 1 again at other points to add additional reference anchors.`)
       } else {
         setTapTimes([curTime])
         setStatus("First tap of Beat 1 pair recorded. Tap on the next Beat 1 to define the initial tempo.")
       }
     } else {
-      // 3rd Tap: Align Late Beat 1
-      const lateTime = findWavePeak(curTime)
+      // 3rd or subsequent Tap: Add another reference anchor
+      const snappedTime = findWavePeak(curTime)
+      if (currentTappedList.some(t => Math.abs(t - snappedTime) < 0.1)) {
+        setStatus("Beat 1 already registered near this position.")
+        return
+      }
+      
+      const updatedList = [...currentTappedList, snappedTime].sort((a, b) => a - b)
+      
+      // Keep beatPairs and lateBeatSec updated for compatibility with older code/UI
+      const firstPair: BeatPair = {
+        t1: updatedList[0],
+        t2: updatedList[1]
+      }
+      const lastTapped = updatedList[updatedList.length - 1]
+
       updateTrack(currentTrack.id, {
-        lateBeatSec: lateTime
+        beatPairs: [firstPair],
+        lateBeatSec: lastTapped,
+        tappedBeat1s: updatedList
       })
-      setStatus(`Late Beat 1 aligned at ${formatTime(lateTime)}. Grid calibrated and locked!`)
+      setStatus(`Added Beat 1 reference anchor at ${formatTime(snappedTime)}. Total anchors: ${updatedList.length}. Grid re-interpolated!`)
     }
   }
 
@@ -2375,7 +2449,8 @@ function App() {
     updateTrack(currentTrack.id, {
       beatPairs: [],
       lateBeatSec: undefined,
-      intervalOffsetSec: undefined
+      intervalOffsetSec: undefined,
+      tappedBeat1s: []
     })
     setStatus('Beat alignment reset.')
   }
@@ -2757,17 +2832,12 @@ function App() {
                               return (
                                 <span
                                   key={star}
-                                  onClick={() => {
-                                    const newRating = t.qualityRating === star ? 0 : star
-                                    updateTrack(t.id, { qualityRating: newRating })
-                                  }}
                                   style={{
-                                    cursor: 'pointer',
                                     color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
                                     padding: '0 1px',
                                     display: 'inline-block',
                                   }}
-                                  title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                                  title={`Rating: ${t.qualityRating || 0} Star${(t.qualityRating || 0) !== 1 ? 's' : ''}`}
                                 >
                                   ★
                                 </span>
@@ -2878,17 +2948,12 @@ function App() {
                                       return (
                                         <span
                                           key={star}
-                                          onClick={() => {
-                                            const newRating = t.qualityRating === star ? 0 : star
-                                            updateTrack(t.id, { qualityRating: newRating })
-                                          }}
                                           style={{
-                                            cursor: 'pointer',
                                             color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
                                             padding: '0 1px',
                                             display: 'inline-block',
                                           }}
-                                          title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                                          title={`Rating: ${t.qualityRating || 0} Star${(t.qualityRating || 0) !== 1 ? 's' : ''}`}
                                         >
                                           ★
                                         </span>
@@ -3143,78 +3208,38 @@ function App() {
                   const fullPct = Math.min(100, Math.max(0, (cur / dur) * 100))
 
                   return (
-                    <div className="cue-bar-wrap" style={{ margin: '4px 0 24px' }}>
+                    <div className="cue-bar-wrap" style={{ margin: '4px 0 4px' }}>
                       <div className="cue-bar-container">
-                        {!currentWaveform && (
-                          <div className="cue-bar" style={{ background: 'rgba(255,255,255,0.15)', height: '8px', borderRadius: '4px', position: 'relative', width: '100%' }}>
-                            <div className="cue-bar-active" style={{ position: 'absolute', height: '100%', left: `${cuePos}%`, width: `${endPos - cuePos}%`, background: '#4cd8b0', opacity: 0.3 }} />
-                            <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${fullPct}%`, background: '#4cd8b0', borderRadius: '4px' }} />
-                            <div className="cue-marker cue-marker-start" style={{ position: 'absolute', left: `${cuePos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px' }} title={`Cue: ${fmtSec(cueStart)}`} />
-                            <div className="cue-marker cue-marker-end" style={{ position: 'absolute', left: `${endPos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px' }} title={`End: ${fmtSec(limitTime)}`} />
-                          </div>
-                        )}
-                        {currentWaveform && (
-                          <div className="waveform-wrapper" style={{
-                            position: 'relative',
-                            width: '100%',
-                            height: '24px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '1.5px',
-                            pointerEvents: 'none'
-                          }}>
-                            {currentWaveform.map((val, idx) => {
-                              const barPct = (idx / currentWaveform.length) * 100
-                              const isActive = barPct <= fullPct
-                              const isWdsfActive = barPct >= cuePos && barPct <= endPos
-
-                              let barColor = 'rgba(255, 255, 255, 0.25)'
-                              if (isActive) {
-                                barColor = '#4cd8b0'
-                              } else if (isWdsfActive) {
-                                barColor = 'rgba(76, 216, 176, 0.35)'
-                              }
-
-                              return (
-                                <div
-                                  key={idx}
-                                  style={{
-                                    flex: 1,
-                                    height: `${Math.max(15, val * 100)}%`,
-                                    background: barColor,
-                                    borderRadius: '1px',
-                                    transition: 'background-color 0.1s'
-                                  }}
-                                />
-                              )
-                            })}
-                            <div className="cue-marker cue-marker-start" style={{ position: 'absolute', left: `${cuePos}%`, background: '#fff', width: '2px', height: '28px', top: '-2px', zIndex: 5 }} title={`Cue: ${fmtSec(cueStart)}`} />
-                            <div className="cue-marker cue-marker-end" style={{ position: 'absolute', left: `${endPos}%`, background: '#fff', width: '2px', height: '28px', top: '-2px', zIndex: 5 }} title={`End: ${fmtSec(limitTime)}`} />
-                            {beat1Times.map((time, idx) => {
-                              const pct = (time / dur) * 100
-                              const isRegistered = currentTrack.beatPairs?.some(
-                                pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
-                              ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)
-                              if (!isRegistered) return null
-                              return (
-                                <div
-                                  key={`beat1-${idx}`}
-                                  style={{
-                                    position: 'absolute',
-                                    left: `${pct}%`,
-                                    bottom: 0,
-                                    height: '8px',
-                                    width: '1px',
-                                    background: '#ffd56b',
-                                    zIndex: 4
-                                  }}
-                                  title={`Beat 1: ${fmtSec(time)} (Registered Click)`}
-                                />
-                              )
-                            })}
-                          </div>
-                        )}
+                        <div className="cue-bar" style={{ background: 'rgba(255,255,255,0.15)', height: '8px', borderRadius: '4px', position: 'relative', width: '100%' }}>
+                          <div className="cue-bar-active" style={{ position: 'absolute', height: '100%', left: `${cuePos}%`, width: `${endPos - cuePos}%`, background: '#4cd8b0', opacity: 0.3 }} />
+                          <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${fullPct}%`, background: '#4cd8b0', borderRadius: '4px' }} />
+                          <div className="cue-marker cue-marker-start" style={{ position: 'absolute', left: `${cuePos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px', zIndex: 5 }} title={`Cue: ${fmtSec(cueStart)}`} />
+                          <div className="cue-marker cue-marker-end" style={{ position: 'absolute', left: `${endPos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px', zIndex: 5 }} title={`End: ${fmtSec(limitTime)}`} />
+                          {beat1Times.map((time, idx) => {
+                            const pct = (time / dur) * 100
+                            const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
+                              ? currentTrack.tappedBeat1s.some(t => Math.abs(time - t) < 0.1)
+                              : ((currentTrack.beatPairs?.some(
+                                  pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
+                                ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
+                            if (!isRegistered) return null
+                            return (
+                              <div
+                                key={`beat1-${idx}`}
+                                style={{
+                                  position: 'absolute',
+                                  left: `${pct}%`,
+                                  bottom: 0,
+                                  height: '8px',
+                                  width: '1px',
+                                  background: '#ffd56b',
+                                  zIndex: 4
+                                }}
+                                title={`Beat 1: ${fmtSec(time)} (Registered Click)`}
+                              />
+                            )
+                          })}
+                        </div>
                         <input
                           type="range"
                           className="cue-bar-slider"
@@ -3267,78 +3292,6 @@ function App() {
                         <span>▶ {fmtSec(cur)} / {fmtSec(limitTime)} (Cue: {fmtSec(cueStart)})</span>
                         <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
                       </div>
-
-                      <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const audio = audioRef.current
-                            if (audio) {
-                              const cue = currentTrack.cueStartSec || 0
-                              audio.currentTime = cue
-                              setMainCurrentTime(cue)
-                            }
-                          }}
-                          style={{
-                            flex: 1,
-                            background: 'rgba(255,255,255,0.08)',
-                            color: '#fff',
-                            border: '1px solid rgba(255,255,255,0.15)',
-                            borderRadius: '6px',
-                            padding: '4px 8px',
-                            cursor: 'pointer',
-                            fontSize: '0.72rem'
-                          }}
-                        >
-                          ⏮ Jump Start
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const audio = audioRef.current
-                            if (audio) {
-                              const mid = dur * 0.5
-                              audio.currentTime = mid
-                              setMainCurrentTime(mid)
-                            }
-                          }}
-                          style={{
-                            flex: 1,
-                            background: 'rgba(255,255,255,0.08)',
-                            color: '#fff',
-                            border: '1px solid rgba(255,255,255,0.15)',
-                            borderRadius: '6px',
-                            padding: '4px 8px',
-                            cursor: 'pointer',
-                            fontSize: '0.72rem'
-                          }}
-                        >
-                          ⏯ Jump Mid
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const audio = audioRef.current
-                            if (audio) {
-                              const end = dur * 0.9
-                              audio.currentTime = end
-                              setMainCurrentTime(end)
-                            }
-                          }}
-                          style={{
-                            flex: 1,
-                            background: 'rgba(255,255,255,0.08)',
-                            color: '#fff',
-                            border: '1px solid rgba(255,255,255,0.15)',
-                            borderRadius: '6px',
-                            padding: '4px 8px',
-                            cursor: 'pointer',
-                            fontSize: '0.72rem'
-                          }}
-                        >
-                          ⏭ Jump End
-                        </button>
-                      </div>
                     </div>
                   )
                 } else {
@@ -3347,70 +3300,35 @@ function App() {
                   const timeLeft = Math.max(0, dur - cur)
 
                   return (
-                    <div className="cue-bar-wrap" style={{ margin: '4px 0 24px' }}>
+                    <div className="cue-bar-wrap" style={{ margin: '4px 0 4px' }}>
                       <div className="cue-bar-container">
-                        {!currentWaveform && (
-                          <div className="cue-bar" style={{ background: 'rgba(255,255,255,0.15)', height: '8px', borderRadius: '4px', position: 'relative', overflow: 'hidden', width: '100%' }}>
-                            <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${pct}%`, background: '#4cd8b0' }} />
-                          </div>
-                        )}
-                        {currentWaveform && (
-                          <div className="waveform-wrapper" style={{
-                            position: 'relative',
-                            width: '100%',
-                            height: '24px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: '1.5px',
-                            pointerEvents: 'none'
-                          }}>
-                            {currentWaveform.map((val, idx) => {
-                              const barPct = (idx / currentWaveform.length) * 100
-                              const isActive = barPct <= pct
-
-                              let barColor = 'rgba(255, 255, 255, 0.25)'
-                              if (isActive) {
-                                barColor = '#4cd8b0'
-                              }
-
-                              return (
-                                <div
-                                  key={idx}
-                                  style={{
-                                    flex: 1,
-                                    height: `${Math.max(15, val * 100)}%`,
-                                    background: barColor,
-                                    borderRadius: '1px',
-                                    transition: 'background-color 0.1s'
-                                  }}
-                                />
-                              )
-                            })}
-                            {beat1Times.map((time, idx) => {
-                              const pct = (time / dur) * 100
-                              const isRegistered = currentTrack.beatPairs?.some(
-                                pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
-                              ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)
-                              if (!isRegistered) return null
-                              return (
-                                <div
-                                  key={`beat1-${idx}`}
-                                  style={{
-                                    position: 'absolute',
-                                    left: `${pct}%`,
-                                    bottom: 0,
-                                    height: '8px',
-                                    width: '1px',
-                                    background: '#ffd56b',
-                                    zIndex: 4
-                                  }}
-                                  title={`Beat 1: ${fmtSec(time)} (Registered Click)`}
-                                />
-                              )
-                            })}
-                          </div>
-                        )}
+                        <div className="cue-bar" style={{ background: 'rgba(255,255,255,0.15)', height: '8px', borderRadius: '4px', position: 'relative', width: '100%' }}>
+                          <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${pct}%`, background: '#4cd8b0', borderRadius: '4px' }} />
+                          {beat1Times.map((time, idx) => {
+                            const markerPct = (time / dur) * 100
+                            const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
+                              ? currentTrack.tappedBeat1s.some(t => Math.abs(time - t) < 0.1)
+                              : ((currentTrack.beatPairs?.some(
+                                  pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
+                                ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
+                            if (!isRegistered) return null
+                            return (
+                              <div
+                                key={`beat1-${idx}`}
+                                style={{
+                                  position: 'absolute',
+                                  left: `${markerPct}%`,
+                                  bottom: 0,
+                                  height: '8px',
+                                  width: '1px',
+                                  background: '#ffd56b',
+                                  zIndex: 4
+                                }}
+                                title={`Beat 1: ${fmtSec(time)} (Registered Click)`}
+                              />
+                            )
+                          })}
+                        </div>
                         <input
                           type="range"
                           className="cue-bar-slider"
@@ -3462,78 +3380,6 @@ function App() {
                       <div className="cue-bar-labels" style={{ display: 'flex', justifyContent: 'space-between', color: '#a0b2bd', fontSize: '0.75rem', marginTop: '12px' }}>
                         <span>▶ {fmtSec(cur)} / {fmtSec(dur)}</span>
                         <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
-                      </div>
-
-                      <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const audio = audioRef.current
-                            if (audio) {
-                              const cue = currentTrack.cueStartSec || 0
-                              audio.currentTime = cue
-                              setMainCurrentTime(cue)
-                            }
-                          }}
-                          style={{
-                            flex: 1,
-                            background: 'rgba(255,255,255,0.08)',
-                            color: '#fff',
-                            border: '1px solid rgba(255,255,255,0.15)',
-                            borderRadius: '6px',
-                            padding: '4px 8px',
-                            cursor: 'pointer',
-                            fontSize: '0.72rem'
-                          }}
-                        >
-                          ⏮ Jump Start
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const audio = audioRef.current
-                            if (audio) {
-                              const mid = dur * 0.5
-                              audio.currentTime = mid
-                              setMainCurrentTime(mid)
-                            }
-                          }}
-                          style={{
-                            flex: 1,
-                            background: 'rgba(255,255,255,0.08)',
-                            color: '#fff',
-                            border: '1px solid rgba(255,255,255,0.15)',
-                            borderRadius: '6px',
-                            padding: '4px 8px',
-                            cursor: 'pointer',
-                            fontSize: '0.72rem'
-                          }}
-                        >
-                          ⏯ Jump Mid
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const audio = audioRef.current
-                            if (audio) {
-                              const end = dur * 0.9
-                              audio.currentTime = end
-                              setMainCurrentTime(end)
-                            }
-                          }}
-                          style={{
-                            flex: 1,
-                            background: 'rgba(255,255,255,0.08)',
-                            color: '#fff',
-                            border: '1px solid rgba(255,255,255,0.15)',
-                            borderRadius: '6px',
-                            padding: '4px 8px',
-                            cursor: 'pointer',
-                            fontSize: '0.72rem'
-                          }}
-                        >
-                          ⏭ Jump End
-                        </button>
                       </div>
                     </div>
                   )
@@ -3935,17 +3781,12 @@ function App() {
                                 return (
                                   <span
                                     key={star}
-                                    onClick={() => {
-                                      const newRating = t.qualityRating === star ? 0 : star
-                                      updateTrack(t.id, { qualityRating: newRating })
-                                    }}
                                     style={{
-                                      cursor: 'pointer',
                                       color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
                                       padding: '0 1px',
                                       display: 'inline-block',
                                     }}
-                                    title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                                    title={`Rating: ${t.qualityRating || 0} Star${(t.qualityRating || 0) !== 1 ? 's' : ''}`}
                                   >
                                     ★
                                   </span>
@@ -3977,6 +3818,13 @@ function App() {
         {/* ── Export ── */}
         {activeTab === 'export' && (
           <>
+            <section className="panel panel-backup" style={{ marginBottom: '20px' }}>
+              <h2>Song Ratings</h2>
+              <p className="hint" style={{ color: '#ffd56b', fontSize: '0.9rem', lineHeight: '1.4', margin: '8px 0 0 0' }}>
+                The Ratings should be directly changed within the Song-files metadata. See also the rating-editor tool in the section below.
+              </p>
+            </section>
+
             <section className="panel panel-backup">
               <h2>Backup &amp; Restore</h2>
               <p className="hint">
@@ -4146,6 +3994,7 @@ function App() {
                     const color = DANCE_COLORS[dp.name as DanceType] ?? '#555'
                     const isOpen = openDanceCards.has(dp.id) || dp.name === activeDanceType
                     const sortMode = dancePlaylistSorts[dp.id] ?? 'name'
+                    const markedCount = dp.entries.filter((e) => e.type === 'track' && playlist.entries.some((pe) => pe.type === 'track' && pe.trackId === e.trackId)).length
                     return (
                       <details
                         key={dp.id}
@@ -4163,7 +4012,9 @@ function App() {
                         <summary className="dance-playlist-card-header" style={{ background: color }}>
                           <span className="dance-playlist-card-title">{dp.name}</span>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }} onClick={(e) => e.stopPropagation()}>
-                            <span className="dance-playlist-card-count">{dp.entries.length} track{dp.entries.length !== 1 ? 's' : ''}</span>
+                            <span className="dance-playlist-card-count">
+                              {markedCount > 0 ? `${markedCount}/${dp.entries.length}` : dp.entries.length} track{dp.entries.length !== 1 ? 's' : ''}
+                            </span>
                             <div style={{ display: 'inline-flex', gap: '2px', background: 'rgba(0,0,0,0.22)', borderRadius: '5px', padding: '2px' }}>
                               <button
                                 type="button"
@@ -4229,18 +4080,28 @@ function App() {
                               if (!t) return null
                               const isMarked = playlist.entries.some((e) => e.type === 'track' && e.trackId === entry.trackId)
                               return (
-                                <div key={entry.id} className={`dance-playlist-track-row ${isMarked ? 'marked' : ''}`}>
-                                  <button
-                                    type="button"
-                                    title="Add to queue"
-                                    onClick={(e) => {
-                                      e.stopPropagation()
+                                <div
+                                  key={entry.id}
+                                  className={`dance-playlist-track-row ${isMarked ? 'marked' : ''}`}
+                                  style={{ cursor: 'pointer' }}
+                                  onClick={() => {
+                                    if (isMarked) {
+                                      setPlaylist((prev) => ({
+                                        ...prev,
+                                        entries: prev.entries.filter((e) => !(e.type === 'track' && e.trackId === entry.trackId)),
+                                      }))
+                                      setStatus(`Removed \u201c${t.title}\u201d from playlist.`)
+                                    } else {
                                       setPlaylist((prev) => ({
                                         ...prev,
                                         entries: [...prev.entries, { id: createId('entry-track'), type: 'track' as const, trackId: entry.trackId }],
                                       }))
                                       setStatus(`Added \u201c${t.title}\u201d to playlist.`)
-                                    }}
+                                    }
+                                  }}
+                                >
+                                  <div
+                                    title="Add to queue"
                                     style={{
                                       border: `1.5px solid ${isMarked ? 'var(--ok)' : '#7a8a95'}`,
                                       borderRadius: '50%',
@@ -4255,7 +4116,6 @@ function App() {
                                       color: isMarked ? '#fff' : '#7a8a95',
                                       fontWeight: 'bold',
                                       fontSize: '0.85rem',
-                                      cursor: 'pointer',
                                       transition: 'all 0.12s',
                                       flexShrink: 0,
                                       outline: 'none',
@@ -4264,7 +4124,7 @@ function App() {
                                     }}
                                   >
                                     {idx + 1}
-                                  </button>
+                                  </div>
                                   <div className="dance-track-info" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                                     <span className="dance-track-title" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                                       {cleanDisplayTitle(t.title)}
@@ -4279,17 +4139,12 @@ function App() {
                                           return (
                                             <span
                                               key={star}
-                                              onClick={() => {
-                                                const newRating = t.qualityRating === star ? 0 : star
-                                                updateTrack(t.id, { qualityRating: newRating })
-                                              }}
                                               style={{
-                                                cursor: 'pointer',
                                                 color: isFilled ? 'var(--sun)' : 'rgba(232, 159, 62, 0.22)',
                                                 padding: '0 1px',
                                                 display: 'inline-block',
                                               }}
-                                              title={isFilled ? `Remove star ${star}` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                                              title={`Rating: ${t.qualityRating || 0} Star${(t.qualityRating || 0) !== 1 ? 's' : ''}`}
                                             >
                                               ★
                                             </span>
@@ -4328,10 +4183,10 @@ function App() {
 
       <nav className="tab-bar" role="tablist" aria-label="Main navigation">
         {([
-          { id: 'songs', label: 'Songs', icon: '♫', badge: null },
-          { id: 'playlists', label: 'Playlists', icon: '☰', badge: playlist.entries.filter((e) => e.type === 'track').length || null },
           { id: 'player', label: 'Player', icon: '▶', badge: activeEntryId ? playlist.entries.filter((e) => e.type === 'track').length || null : null },
-          { id: 'export', label: 'Export', icon: '⬆', badge: null },
+          { id: 'playlists', label: 'Playlists', icon: '☰', badge: playlist.entries.filter((e) => e.type === 'track').length || null },
+          { id: 'songs', label: 'Songs', icon: '♫', badge: null },
+          { id: 'export', label: 'SETUP', icon: '⚙', badge: null },
         ] as const).map(({ id, label, icon, badge }) => (
           <button
             key={id}
@@ -4409,16 +4264,12 @@ function App() {
                   </select>
                 </label>
                 <label className="edit-modal-field half">
-                  <span className="edit-modal-label">Rating</span>
-                  <div style={{ display: 'flex', gap: '5px', fontSize: '1.25rem', cursor: 'pointer', color: 'var(--sun)', userSelect: 'none', margin: '2px 0' }}>
+                  <span className="edit-modal-label">Rating (Read-only)</span>
+                  <div style={{ display: 'flex', gap: '5px', fontSize: '1.25rem', color: 'var(--sun)', userSelect: 'none', margin: '2px 0' }}>
                     {[1, 2, 3, 4, 5].map((star) => (
                       <span
                         key={star}
-                        onClick={() => {
-                          const newRating = t.qualityRating === star ? 0 : star
-                          updateTrack(t.id, { qualityRating: newRating })
-                        }}
-                        title={`${star} Star${star > 1 ? 's' : ''}`}
+                        title={`Rating: ${t.qualityRating || 0} Star${(t.qualityRating || 0) !== 1 ? 's' : ''}`}
                       >
                         {star <= (t.qualityRating ?? 0) ? '★' : '☆'}
                       </span>
