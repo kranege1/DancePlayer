@@ -778,15 +778,9 @@ function App() {
       activeIndex = currentBeatNum - 1
       activeLabel = pattern[activeIndex]
     } else if (dance === 'Foxtrot' || dance === 'Quickstep') {
-      pattern = ['Slow', 'Quick', 'Quick']
-      weights = [2.0, 1.0, 1.0]
-      if (currentBeatNum === 1 || currentBeatNum === 2) {
-        activeIndex = 0
-      } else if (currentBeatNum === 3) {
-        activeIndex = 1
-      } else if (currentBeatNum === 4) {
-        activeIndex = 2
-      }
+      pattern = ['1', '2', '3', '4']
+      weights = [1.0, 1.0, 1.0, 1.0]
+      activeIndex = currentBeatNum - 1
       activeLabel = pattern[activeIndex]
     } else if (dance === 'Paso Doble') {
       pattern = ['1', '2', '3', '4', '5', '6', '7', '8']
@@ -1033,13 +1027,7 @@ function App() {
         } else if (dance === 'Waltz' || dance === 'Viennese Waltz') {
           activeIdx = curBeatNum - 1
         } else if (dance === 'Foxtrot' || dance === 'Quickstep') {
-          if (curBeatNum === 1 || curBeatNum === 2) {
-            activeIdx = 0
-          } else if (curBeatNum === 3) {
-            activeIdx = 1
-          } else if (curBeatNum === 4) {
-            activeIdx = 2
-          }
+          activeIdx = curBeatNum - 1
         } else if (dance === 'Paso Doble') {
           const barIndex = Math.round((barStart - beat1Times[0]) / (barEnd - barStart))
           activeIdx = (((barIndex % 4) + 4) % 4) * 2 + (curBeatNum - 1)
@@ -4150,7 +4138,7 @@ function App() {
                     <strong>Tango:</strong> Displays <code>1 - 2 - 3 - 4</code>.
                   </li>
                   <li>
-                    <strong>Foxtrot &amp; Quickstep:</strong> Displays <code>Slow - Quick - Quick</code>.
+                    <strong>Foxtrot &amp; Quickstep:</strong> Displays <code>1 - 2 - 3 - 4</code>.
                   </li>
                   <li>
                     <strong>Samba:</strong> Displays <code>1 - a - 2</code>. Timings &amp; Durations: <strong>1</strong> starts on Beat 1.0 (Duration: 0.75 beat / Dotted 8th note), <strong>a</strong> starts on Beat 1.75 (Duration: 0.25 beat / 16th note), <strong>2</strong> starts on Beat 2.0 (Duration: 1 full beat).
