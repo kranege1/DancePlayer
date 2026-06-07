@@ -746,31 +746,9 @@ function App() {
       }
       activeLabel = pattern[activeIndex]
     } else if (dance === 'Jive') {
-      pattern = ['1', '2', '3', '&', '4', '5', '&', '6']
-      weights = [1.0, 1.0, 0.5, 0.5, 1.0, 0.5, 0.5, 1.0]
-      const absoluteBeatIndex = Math.floor((cur - beat1Times[0]) / beatDuration)
-      const jiveBeatIndex = ((absoluteBeatIndex % 6) + 6) % 6
-      if (jiveBeatIndex === 0) {
-        activeIndex = 0
-      } else if (jiveBeatIndex === 1) {
-        activeIndex = 1
-      } else if (jiveBeatIndex === 2) {
-        if (beatProgress < 0.5) {
-          activeIndex = 2
-        } else {
-          activeIndex = 3
-        }
-      } else if (jiveBeatIndex === 3) {
-        activeIndex = 4
-      } else if (jiveBeatIndex === 4) {
-        if (beatProgress < 0.5) {
-          activeIndex = 5
-        } else {
-          activeIndex = 6
-        }
-      } else if (jiveBeatIndex === 5) {
-        activeIndex = 7
-      }
+      pattern = ['1', '2', '3', '4']
+      weights = [1.0, 1.0, 1.0, 1.0]
+      activeIndex = currentBeatNum - 1
       activeLabel = pattern[activeIndex]
     } else if (dance === 'Waltz' || dance === 'Viennese Waltz') {
       pattern = ['1', '2', '3']
@@ -1000,30 +978,7 @@ function App() {
             activeIdx = 2
           }
         } else if (dance === 'Jive') {
-          const absoluteBeatIndex = Math.floor((cur - beat1Times[0]) / beatDuration)
-          const jiveBeatIndex = ((absoluteBeatIndex % 6) + 6) % 6
-          const jiveProgress = (cur - beat1Times[0]) / beatDuration - absoluteBeatIndex
-          if (jiveBeatIndex === 0) {
-            activeIdx = 0
-          } else if (jiveBeatIndex === 1) {
-            activeIdx = 1
-          } else if (jiveBeatIndex === 2) {
-            if (jiveProgress < 0.5) {
-              activeIdx = 2
-            } else {
-              activeIdx = 3
-            }
-          } else if (jiveBeatIndex === 3) {
-            activeIdx = 4
-          } else if (jiveBeatIndex === 4) {
-            if (jiveProgress < 0.5) {
-              activeIdx = 5
-            } else {
-              activeIdx = 6
-            }
-          } else if (jiveBeatIndex === 5) {
-            activeIdx = 7
-          }
+          activeIdx = curBeatNum - 1
         } else if (dance === 'Waltz' || dance === 'Viennese Waltz') {
           activeIdx = curBeatNum - 1
         } else if (dance === 'Foxtrot' || dance === 'Quickstep') {
@@ -4153,7 +4108,7 @@ function App() {
                     <strong>Paso Doble:</strong> Displays the full 8-count phrase <code>1 - 2 - 3 - 4 - 5 - 6 - 7 - 8</code> across a 4-bar progression.
                   </li>
                   <li>
-                    <strong>Jive:</strong> Displays the full 2-bar cycle <code>1 - 2 - 3 &amp; 4 - 5 &amp; 6</code>.
+                    <strong>Jive:</strong> Displays <code>1 - 2 - 3 - 4</code>.
                   </li>
                   <li>
                     <strong>Other:</strong> Dynamically outputs the standard beat numbers (e.g. <code>1 - 2 - 3 - 4</code>).
