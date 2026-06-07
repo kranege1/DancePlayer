@@ -4144,25 +4144,28 @@ function App() {
               }}>
                 <ul style={{ paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '10px', listStyleType: 'disc' }}>
                   <li>
+                    <strong>Waltz &amp; Viennese Waltz:</strong> Displays <code>1 - 2 - 3</code>.
+                  </li>
+                  <li>
+                    <strong>Tango:</strong> Displays <code>1 - 2 - 3 - 4</code>.
+                  </li>
+                  <li>
+                    <strong>Foxtrot &amp; Quickstep:</strong> Displays <code>Slow - Quick - Quick</code>.
+                  </li>
+                  <li>
+                    <strong>Samba:</strong> Displays <code>1 - a - 2</code>. Timings &amp; Durations: <strong>1</strong> starts on Beat 1.0 (Duration: 0.75 beat / Dotted 8th note), <strong>a</strong> starts on Beat 1.75 (Duration: 0.25 beat / 16th note), <strong>2</strong> starts on Beat 2.0 (Duration: 1 full beat).
+                  </li>
+                  <li>
                     <strong>ChaCha:</strong> Displays <code>2 - 3 - 4 &amp; 1</code>, highlighting each beat and subdivision (splitting beat 4 into 4 and &amp; on the eighth note).
                   </li>
                   <li>
                     <strong>Rumba:</strong> Displays <code>2 - 3 - 4 - 1</code>.
                   </li>
                   <li>
-                    <strong>Samba:</strong> Displays <code>1 - a - 2</code>. Timings &amp; Durations: <strong>1</strong> starts on Beat 1.0 (Duration: 0.75 beat / Dotted 8th note), <strong>a</strong> starts on Beat 1.75 (Duration: 0.25 beat / 16th note), <strong>2</strong> starts on Beat 2.0 (Duration: 1 full beat).
+                    <strong>Paso Doble:</strong> Displays the full 8-count phrase <code>1 - 2 - 3 - 4 - 5 - 6 - 7 - 8</code> across a 4-bar progression.
                   </li>
                   <li>
                     <strong>Jive:</strong> Displays the full 2-bar cycle <code>1 - 2 - 3 &amp; 4 - 5 &amp; 6</code>.
-                  </li>
-                  <li>
-                    <strong>Waltz &amp; Viennese Waltz:</strong> Displays <code>1 - 2 - 3</code>.
-                  </li>
-                  <li>
-                    <strong>Foxtrot &amp; Quickstep:</strong> Displays <code>Slow - Quick - Quick</code>.
-                  </li>
-                  <li>
-                    <strong>Paso Doble:</strong> Displays the full 8-count phrase <code>1 - 2 - 3 - 4 - 5 - 6 - 7 - 8</code> across a 4-bar progression.
                   </li>
                   <li>
                     <strong>Other:</strong> Dynamically outputs the standard beat numbers (e.g. <code>1 - 2 - 3 - 4</code>).
