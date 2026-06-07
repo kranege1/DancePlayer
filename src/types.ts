@@ -41,6 +41,8 @@ export interface Track {
   hash?: string
   removedEarlier?: boolean
   beatPairs?: BeatPair[]
+  lateBeatSec?: number
+  intervalOffsetSec?: number
 }
 
 export interface BeatPair {

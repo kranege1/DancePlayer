@@ -392,8 +392,7 @@ function App() {
   const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>(() => persistedState.savedPlaylists ?? [])
   const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('songs')
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null)
-  const [showZoomOverlay, setShowZoomOverlay] = useState(false)
-  const [zoomBarsCount, setZoomBarsCount] = useState(5)
+  const [zoomBarsCount] = useState(5)
   const zoomCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const zoomBeatPillRef = useRef<HTMLDivElement | null>(null)
   const zoomAnimationFrameRef = useRef<number | null>(null)
@@ -570,61 +569,38 @@ function App() {
     }
     const dur = mainDuration || currentTrack.durationSec || 120
     const pairs = [...currentTrack.beatPairs].sort((a, b) => a.t1 - b.t1)
+    const lateBeat = currentTrack.lateBeatSec
+    const fineTuneOffset = currentTrack.intervalOffsetSec || 0
 
     const list: number[] = []
-
-    // 1. Before the first pair (Pair 0): project backward
     const firstPair = pairs[0]
-    const firstInterval = firstPair.t2 - firstPair.t1
-    if (firstInterval > 0) {
+
+    // Determine base interval
+    let I_base = firstPair.t2 - firstPair.t1
+
+    if (pairs.length === 1 && lateBeat !== undefined && lateBeat > firstPair.t2 && I_base > 0) {
+      const numBars = Math.round((lateBeat - firstPair.t2) / I_base)
+      if (numBars > 0) {
+        I_base = (lateBeat - firstPair.t2) / numBars
+      }
+    }
+
+    const I_final = I_base + fineTuneOffset
+
+    if (I_final > 0) {
+      // Generate uniform grid using I_final starting from firstPair.t1
       let t = firstPair.t1
       while (t >= 0) {
         list.unshift(t)
-        t -= firstInterval
+        t -= I_final
       }
-    }
-
-    // 2. Loop through all pairs and transition between them
-    for (let i = 0; i < pairs.length; i++) {
-      const pair = pairs[i]
-      const pairInterval = pair.t2 - pair.t1
-      
-      // Inside the pair (contains exactly 1 bar): from t1 to t2
-      if (!list.includes(pair.t2)) {
-        list.push(pair.t2)
-      }
-
-      // Transition to next pair if it exists
-      if (i < pairs.length - 1) {
-        const nextPair = pairs[i + 1]
-        const transitionDist = nextPair.t1 - pair.t2
-        if (transitionDist > 0) {
-          const nextPairInterval = nextPair.t2 - nextPair.t1
-          const avgInterval = (pairInterval + nextPairInterval) / 2
-          const numBars = Math.max(1, Math.round(transitionDist / avgInterval))
-          const transInterval = transitionDist / numBars
-          for (let k = 1; k < numBars; k++) {
-            list.push(pair.t2 + k * transInterval)
-          }
-        }
-        if (!list.includes(nextPair.t1)) {
-          list.push(nextPair.t1)
-        }
-      }
-    }
-
-    // 3. After the last pair: project forward
-    const lastPair = pairs[pairs.length - 1]
-    const lastInterval = lastPair.t2 - lastPair.t1
-    if (lastInterval > 0) {
-      let t = lastPair.t2 + lastInterval
+      t = firstPair.t1 + I_final
       while (t < dur) {
         list.push(t)
-        t += lastInterval
+        t += I_final
       }
     }
 
-    // Return unique sorted timestamps
     return Array.from(new Set(list)).sort((a, b) => a - b)
   }, [currentTrack, mainDuration])
 
@@ -720,7 +696,7 @@ function App() {
   }, [currentTrack])
 
   useEffect(() => {
-    if (!showZoomOverlay || !currentTrack) {
+    if (!currentTrack) {
       if (zoomAnimationFrameRef.current) {
         cancelAnimationFrame(zoomAnimationFrameRef.current)
         zoomAnimationFrameRef.current = null
@@ -895,7 +871,7 @@ function App() {
             const weight = sampleIdx - idxL
             const val = (1 - weight) * (zoomWaveform[idxL] || 0) + weight * (zoomWaveform[idxR] || 0)
 
-            const barH = val * (h - 20)
+            const barH = Math.min(1.0, val * 2.0) * (h - 10)
             const y = (h - barH) / 2
             
             // Draw active/inactive color based on if it's past cur
@@ -915,7 +891,7 @@ function App() {
           const x = ((time - tMin) / windowDuration) * w
           const isRegistered = currentTrack.beatPairs?.some(
             pair => Math.abs(time - pair.t1) < 0.001 || Math.abs(time - pair.t2) < 0.001
-          )
+          ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.001)
 
           ctx.strokeStyle = isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.4)'
           ctx.lineWidth = isRegistered ? 2 : 1
@@ -959,7 +935,7 @@ function App() {
         zoomAnimationFrameRef.current = null
       }
     }
-  }, [showZoomOverlay, currentTrack, beat1Times, zoomBarsCount, mainCurrentTime, mainDuration])
+  }, [currentTrack, beat1Times, zoomBarsCount, mainCurrentTime, mainDuration])
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return
@@ -2098,31 +2074,41 @@ function App() {
   }
 
   function handleTapBeat1() {
+    if (!currentTrack) return
     const audio = audioRef.current
-    if (!audio || !currentTrack) return
+    if (!audio) return
     const curTime = audio.currentTime
     const latencySec = (settings.tapLatencyMs ?? 100) / 1000
 
-    const lastTap = tapTimes[tapTimes.length - 1]
-    const isSecondOfPair = lastTap !== undefined && (curTime - lastTap) < 5.0
+    const hasNoPairs = !currentTrack.beatPairs || currentTrack.beatPairs.length === 0
 
-    if (isSecondOfPair) {
-      const newPair: BeatPair = {
-        t1: lastTap - latencySec,
-        t2: curTime - latencySec
+    if (hasNoPairs) {
+      const lastTap = tapTimes[tapTimes.length - 1]
+      const isSecondOfPair = lastTap !== undefined && (curTime - lastTap) < 5.0
+
+      if (isSecondOfPair) {
+        const newPair: BeatPair = {
+          t1: lastTap - latencySec,
+          t2: curTime - latencySec
+        }
+        setTapTimes([])
+        updateTrack(currentTrack.id, {
+          beatPairs: [newPair]
+        })
+        const pairInterval = newPair.t2 - newPair.t1
+        const calculatedBpm = Math.round(60 / pairInterval)
+        setStatus(`Beat Pair registered! Local tempo: ${calculatedBpm} Bars/Min (${Math.round(calculatedBpm * BEATS_PER_BAR[currentTrack.danceType])} BPM). Now move to a later stage of the song and tap once to align.`)
+      } else {
+        setTapTimes([curTime])
+        setStatus("First tap of Beat 1 pair recorded. Tap on the next Beat 1 to define the initial tempo.")
       }
-      setTapTimes([])
-      const existingPairs = currentTrack.beatPairs ?? []
-      const updatedPairs = [...existingPairs, newPair].sort((a, b) => a.t1 - b.t1)
-      updateTrack(currentTrack.id, {
-        beatPairs: updatedPairs
-      })
-      const pairInterval = newPair.t2 - newPair.t1
-      const calculatedBpm = Math.round(60 / pairInterval)
-      setStatus(`Beat Pair registered! Local tempo: ${calculatedBpm} Bars/Min (${Math.round(calculatedBpm * BEATS_PER_BAR[currentTrack.danceType])} BPM).`)
     } else {
-      setTapTimes([curTime])
-      setStatus("First tap of Beat 1 pair recorded. Tap on the next Beat 1 to align this section.")
+      // 3rd Tap: Align Late Beat 1
+      const lateTime = curTime - latencySec
+      updateTrack(currentTrack.id, {
+        lateBeatSec: lateTime
+      })
+      setStatus(`Late Beat 1 aligned at ${formatTime(lateTime)}. Grid calibrated and locked!`)
     }
   }
 
@@ -2130,9 +2116,19 @@ function App() {
     if (!currentTrack) return
     setTapTimes([])
     updateTrack(currentTrack.id, {
-      beatPairs: []
+      beatPairs: [],
+      lateBeatSec: undefined,
+      intervalOffsetSec: undefined
     })
     setStatus('Beat alignment reset.')
+  }
+
+  function fineTuneInterval(offsetMs: number) {
+    if (!currentTrack) return
+    const currentOffset = currentTrack.intervalOffsetSec || 0
+    updateTrack(currentTrack.id, {
+      intervalOffsetSec: currentOffset + offsetMs / 1000
+    })
   }
 
 
@@ -2949,58 +2945,7 @@ function App() {
                         <span>▶ {fmtSec(cur)} / {fmtSec(limitTime)} (Cue: {fmtSec(cueStart)})</span>
                         <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
                       </div>
-                      <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                        <button
-                          type="button"
-                          onClick={handleTapBeat1}
-                          style={{
-                            flex: 1,
-                            background: 'linear-gradient(180deg, #ff8a65 0%, #ff7043 100%)',
-                            color: '#fff',
-                            border: '1px solid #e64a19',
-                            borderRadius: '8px',
-                            padding: '6px 12px',
-                            fontWeight: 'bold',
-                            cursor: 'pointer',
-                            fontSize: '0.8rem'
-                          }}
-                        >
-                          🥁 Tap Beat 1 ({tapTimes.length} tapped)
-                        </button>
-                        {currentTrack.beatPairs && currentTrack.beatPairs.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={handleResetBeats}
-                            style={{
-                              background: 'rgba(255,255,255,0.1)',
-                              color: '#fff',
-                              border: '1px solid rgba(255,255,255,0.2)',
-                              borderRadius: '8px',
-                              padding: '6px 12px',
-                              cursor: 'pointer',
-                              fontSize: '0.8rem'
-                            }}
-                          >
-                            ✕ Reset
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => setShowZoomOverlay(true)}
-                          style={{
-                            background: '#1c3d4e',
-                            color: '#ffd56b',
-                            border: '1px solid #ffd56b',
-                            borderRadius: '8px',
-                            padding: '6px 12px',
-                            cursor: 'pointer',
-                            fontSize: '0.8rem',
-                            fontWeight: 'bold'
-                          }}
-                        >
-                          🔍 Zoom View
-                        </button>
-                      </div>
+
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
                         <button
                           type="button"
@@ -3196,58 +3141,7 @@ function App() {
                         <span>▶ {fmtSec(cur)} / {fmtSec(dur)}</span>
                         <span style={{ fontWeight: 'bold', color: '#4cd8b0' }}>-{fmtSec(timeLeft)} left</span>
                       </div>
-                      <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                        <button
-                          type="button"
-                          onClick={handleTapBeat1}
-                          style={{
-                            flex: 1,
-                            background: 'linear-gradient(180deg, #ff8a65 0%, #ff7043 100%)',
-                            color: '#fff',
-                            border: '1px solid #e64a19',
-                            borderRadius: '8px',
-                            padding: '6px 12px',
-                            fontWeight: 'bold',
-                            cursor: 'pointer',
-                            fontSize: '0.8rem'
-                          }}
-                        >
-                          🥁 Tap Beat 1 ({tapTimes.length} tapped)
-                        </button>
-                        {currentTrack.beatPairs && currentTrack.beatPairs.length > 0 && (
-                          <button
-                            type="button"
-                            onClick={handleResetBeats}
-                            style={{
-                              background: 'rgba(255,255,255,0.1)',
-                              color: '#fff',
-                              border: '1px solid rgba(255,255,255,0.2)',
-                              borderRadius: '8px',
-                              padding: '6px 12px',
-                              cursor: 'pointer',
-                              fontSize: '0.8rem'
-                            }}
-                          >
-                            ✕ Reset
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => setShowZoomOverlay(true)}
-                          style={{
-                            background: '#1c3d4e',
-                            color: '#ffd56b',
-                            border: '1px solid #ffd56b',
-                            borderRadius: '8px',
-                            padding: '6px 12px',
-                            cursor: 'pointer',
-                            fontSize: '0.8rem',
-                            fontWeight: 'bold'
-                          }}
-                        >
-                          🔍 Zoom View
-                        </button>
-                      </div>
+
                       <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
                         <button
                           type="button"
@@ -3403,6 +3297,93 @@ function App() {
                 <button type="button" className="ctrl-btn speed-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', borderColor: 'rgba(255,255,255,0.1)', padding: '5px 10px' }} onClick={() => applySpeedDelta(1)}>+1%</button>
                 <span className="speed-label" style={{ color: '#fff9ef', fontSize: '0.85rem', minWidth: '45px', textAlign: 'right' }}>{settings.speedPct > 0 ? '+' : ''}{settings.speedPct}%</span>
               </div>
+
+              {/* Integrated Zoom Waveform Canvas */}
+              {currentTrack && (
+                <div className="zoom-section" style={{ background: '#071620', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '12px', padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div ref={zoomBeatPillRef} className="zoom-beat-pill" style={{ margin: 0, fontSize: '0.8rem', padding: '2px 8px', borderRadius: '4px' }}>
+                      Beat -
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#a0b2bd' }}>
+                      Range: <strong>{zoomBarsCount} Bars</strong>
+                    </div>
+                  </div>
+
+                  <div className="zoom-canvas-container" style={{ position: 'relative', width: '100%', height: '70px', background: '#0b1f2a', borderRadius: '8px', overflow: 'hidden' }}>
+                    <canvas ref={zoomCanvasRef} className="zoom-canvas" style={{ width: '100%', height: '100%', display: 'block' }} />
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        type="button"
+                        onClick={handleTapBeat1}
+                        style={{
+                          background: 'linear-gradient(180deg, #ff8a65 0%, #ff7043 100%)',
+                          color: '#fff',
+                          border: '1px solid #e64a19',
+                          borderRadius: '6px',
+                          padding: '4px 10px',
+                          fontWeight: 'bold',
+                          cursor: 'pointer',
+                          fontSize: '0.75rem'
+                        }}
+                      >
+                        {(!currentTrack.beatPairs || currentTrack.beatPairs.length === 0) ? (
+                          `🥁 Tap Beat 1 (${tapTimes.length}/2)`
+                        ) : (
+                          '🎯 Align Late Beat 1'
+                        )}
+                      </button>
+                      
+                      {((currentTrack.beatPairs && currentTrack.beatPairs.length > 0) || currentTrack.lateBeatSec !== undefined) && (
+                        <button
+                          type="button"
+                          onClick={handleResetBeats}
+                          style={{
+                            background: 'rgba(255,255,255,0.1)',
+                            color: '#fff',
+                            border: '1px solid rgba(255,255,255,0.2)',
+                            borderRadius: '6px',
+                            padding: '4px 10px',
+                            cursor: 'pointer',
+                            fontSize: '0.75rem'
+                          }}
+                        >
+                          ✕ Reset
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Fine tune control */}
+                    {currentTrack.beatPairs && currentTrack.beatPairs.length > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontSize: '0.72rem', color: '#a0b2bd', textTransform: 'uppercase', letterSpacing: '0.05em', marginRight: '4px' }}>Fine-Tune:</span>
+                        <button
+                          type="button"
+                          onClick={() => fineTuneInterval(-1)}
+                          style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', borderRadius: '4px', padding: '2px 6px', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 'bold' }}
+                          title="Subtract 1ms from interval"
+                        >
+                          ◀ -1ms
+                        </button>
+                        <span style={{ fontSize: '0.75rem', fontWeight: 'bold', minWidth: '40px', textAlign: 'center', color: '#ffd56b' }}>
+                          {currentTrack.intervalOffsetSec ? `${(currentTrack.intervalOffsetSec * 1000).toFixed(0)}ms` : '0ms'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => fineTuneInterval(1)}
+                          style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', borderRadius: '4px', padding: '2px 6px', fontSize: '0.72rem', cursor: 'pointer', fontWeight: 'bold' }}
+                          title="Add 1ms to interval"
+                        >
+                          +1ms ▶
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Settings & Automation collapsible card */}
@@ -4359,109 +4340,7 @@ function App() {
         </div>
       )}
 
-      {showZoomOverlay && currentTrack && (
-        <div className="zoom-overlay" onClick={() => setShowZoomOverlay(false)}>
-          <div className="zoom-card" onClick={(e) => e.stopPropagation()}>
-            <header className="zoom-card-header">
-              <div>
-                <h2 style={{ margin: 0, fontSize: '1.2rem', color: '#fff9ef' }}>{cleanDisplayTitle(currentTrack.title)}</h2>
-                <span className="dance-badge" style={{ background: DANCE_COLORS[currentTrack.danceType], marginTop: '4px', display: 'inline-block' }}>
-                  {currentTrack.danceType}
-                </span>
-              </div>
-              <button type="button" className="close-zoom-btn" onClick={() => setShowZoomOverlay(false)}>✕</button>
-            </header>
 
-            <div className="zoom-beat-indicator-container">
-              <div ref={zoomBeatPillRef} className="zoom-beat-pill">
-                Beat -
-              </div>
-            </div>
-
-            <div className="zoom-canvas-container">
-              <canvas ref={zoomCanvasRef} className="zoom-canvas" />
-            </div>
-
-            <div className="zoom-time-label">
-              ▶ {formatTime(mainCurrentTime)} / {formatTime(mainDuration || currentTrack.durationSec)}
-            </div>
-
-            <div className="zoom-slider-row">
-              <label htmlFor="zoom-bars-slider">View Range: <strong>{zoomBarsCount} Bars</strong></label>
-              <input
-                id="zoom-bars-slider"
-                type="range"
-                min="3"
-                max="10"
-                step="1"
-                value={zoomBarsCount}
-                onChange={(e) => setZoomBarsCount(Number(e.target.value))}
-              />
-            </div>
-
-            <div className="zoom-actions-row">
-              <button
-                type="button"
-                className="zoom-tap-btn"
-                onClick={handleTapBeat1}
-              >
-                🥁 Tap Beat 1 ({tapTimes.length} tapped)
-              </button>
-              <button
-                type="button"
-                className="zoom-reset-btn"
-                onClick={() => {
-                  handleResetBeats()
-                }}
-              >
-                ✕ Reset Alignment
-              </button>
-            </div>
-
-            <div className="zoom-nav-row">
-              <button
-                type="button"
-                onClick={() => {
-                  const audio = audioRef.current
-                  if (audio) {
-                    const cue = currentTrack.cueStartSec || 0
-                    audio.currentTime = cue
-                    setMainCurrentTime(cue)
-                  }
-                }}
-              >
-                ⏮ Start
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const audio = audioRef.current
-                  if (audio) {
-                    const mid = (mainDuration || currentTrack.durationSec) * 0.5
-                    audio.currentTime = mid
-                    setMainCurrentTime(mid)
-                  }
-                }}
-              >
-                ⏯ Mid
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const audio = audioRef.current
-                  if (audio) {
-                    const end = (mainDuration || currentTrack.durationSec) * 0.9
-                    audio.currentTime = end
-                    setMainCurrentTime(end)
-                  }
-                }}
-              >
-                ⏭ End
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {isCalibratingLatency && (
         <div className="edit-modal-overlay" style={{ zIndex: 1200 }} onClick={cancelCalibration}>
