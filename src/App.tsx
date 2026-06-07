@@ -3992,6 +3992,49 @@ function App() {
                 </div>
               </div>
             </section>
+
+            <section className="panel panel-backup" style={{ marginTop: '20px', marginBottom: '20px' }}>
+              <h2>Dynamic Counting Phrase Mapping</h2>
+              <p className="hint">
+                When playing a song with alignment grid metadata, the player displays a dynamic counting bar helper (Zählweise der Tänzer) formatted for each specific dance:
+              </p>
+              <div style={{
+                marginTop: '15px',
+                padding: '15px',
+                background: 'rgba(255, 255, 255, 0.05)',
+                borderRadius: '8px',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                fontSize: '13px',
+                lineHeight: '1.6'
+              }}>
+                <ul style={{ paddingLeft: '20px', margin: 0, display: 'flex', flexDirection: 'column', gap: '10px', listStyleType: 'disc' }}>
+                  <li>
+                    <strong>ChaCha:</strong> Displays <code>2 - 3 - 4 &amp; 1</code>, highlighting each beat and subdivision (splitting beat 4 into 4 and &amp; on the eighth note).
+                  </li>
+                  <li>
+                    <strong>Rumba:</strong> Displays <code>2 - 3 - 4 - 1</code>.
+                  </li>
+                  <li>
+                    <strong>Samba:</strong> Displays <code>1 - a - 2 - a</code> (splitting beats 1 and 2 to highlight a on the bounce accent).
+                  </li>
+                  <li>
+                    <strong>Jive:</strong> Displays the full 2-bar cycle <code>1 - 2 - 3 &amp; 4 - 5 &amp; 6</code>.
+                  </li>
+                  <li>
+                    <strong>Waltz &amp; Viennese Waltz:</strong> Displays <code>1 - 2 - 3</code>.
+                  </li>
+                  <li>
+                    <strong>Foxtrot &amp; Quickstep:</strong> Displays <code>Slow - Quick - Quick</code>.
+                  </li>
+                  <li>
+                    <strong>Paso Doble:</strong> Displays the full 8-count phrase <code>1 - 2 - 3 - 4 - 5 - 6 - 7 - 8</code> across a 4-bar progression.
+                  </li>
+                  <li>
+                    <strong>Other:</strong> Dynamically outputs the standard beat numbers (e.g. <code>1 - 2 - 3 - 4</code>).
+                  </li>
+                </ul>
+              </div>
+            </section>
           </>
         )}
       </main>
