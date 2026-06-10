@@ -896,6 +896,56 @@ function App() {
       return
     }
 
+    interface Subdivision {
+      label: string
+      startPct: number
+      endPct: number
+      color: string
+    }
+
+    const getBarSubdivisions = (dance: DanceType): Subdivision[] => {
+      if (dance === 'Samba') {
+        return [
+          { label: '1', startPct: 0.0, endPct: 0.375, color: 'rgba(255, 112, 67, 0.18)' },
+          { label: 'a', startPct: 0.375, endPct: 0.5, color: 'rgba(240, 98, 146, 0.14)' },
+          { label: '2', startPct: 0.5, endPct: 1.0, color: 'rgba(76, 216, 176, 0.1)' }
+        ]
+      }
+      if (dance === 'ChaCha') {
+        return [
+          { label: '1', startPct: 0.0, endPct: 0.25, color: 'rgba(255, 112, 67, 0.18)' },
+          { label: '2', startPct: 0.25, endPct: 0.5, color: 'rgba(76, 216, 176, 0.1)' },
+          { label: '3', startPct: 0.5, endPct: 0.75, color: 'rgba(33, 150, 243, 0.1)' },
+          { label: '4', startPct: 0.75, endPct: 0.875, color: 'rgba(156, 39, 176, 0.1)' },
+          { label: '&', startPct: 0.875, endPct: 1.0, color: 'rgba(103, 58, 183, 0.1)' }
+        ]
+      }
+      if (dance === 'Waltz' || dance === 'Viennese Waltz') {
+        return [
+          { label: '1', startPct: 0.0, endPct: 1/3, color: 'rgba(255, 112, 67, 0.18)' },
+          { label: '2', startPct: 1/3, endPct: 2/3, color: 'rgba(76, 216, 176, 0.1)' },
+          { label: '3', startPct: 2/3, endPct: 1.0, color: 'rgba(33, 150, 243, 0.1)' }
+        ]
+      }
+      const bpb = BEATS_PER_BAR[dance] || 4
+      const subs: Subdivision[] = []
+      for (let b = 0; b < bpb; b++) {
+        const label = String(b + 1)
+        const color = b === 0 
+          ? 'rgba(255, 112, 67, 0.18)' 
+          : b % 2 === 1 
+            ? 'rgba(76, 216, 176, 0.08)' 
+            : 'rgba(33, 150, 243, 0.08)'
+        subs.push({
+          label,
+          startPct: b / bpb,
+          endPct: (b + 1) / bpb,
+          color
+        })
+      }
+      return subs
+    }
+
     const draw = () => {
       const canvas = zoomCanvasRef.current
       if (!canvas) {
@@ -1072,35 +1122,30 @@ function App() {
 
       // Draw colored background beat rectangles
       if (beat1Times.length > 0) {
-        // Find first bar start prior to tMin
         let tempT = tMin - barInterval * 2
-        // Limit iterations in case of extremely small tempo errors
         let limit = 0
+        const subs = getBarSubdivisions(currentTrack.danceType)
+
         while (tempT <= tMax && limit < 100) {
           limit++
           const info = getBeatInfoAtTime(tempT)
           if (info) {
-            const { barStart, barEnd, beatDuration, beatsPerBar } = info
-            for (let b = 0; b < beatsPerBar; b++) {
-              const bStart = barStart + b * beatDuration
-              const bEnd = bStart + beatDuration
+            const { barStart, barEnd } = info
+            const barDur = barEnd - barStart
 
-              if (bEnd >= tMin && bStart <= tMax) {
-                const x1 = Math.max(0, ((bStart - tMin) / windowDuration) * w)
-                const x2 = Math.min(w, ((bEnd - tMin) / windowDuration) * w)
+            if (barEnd >= tMin && barStart <= tMax) {
+              subs.forEach((sub) => {
+                const subStart = barStart + sub.startPct * barDur
+                const subEnd = barStart + sub.endPct * barDur
 
-                // Color mapping: Beat 1 is soft coral/orange, others are soft green/teal
-                if (b === 0) {
-                  ctx.fillStyle = 'rgba(255, 112, 67, 0.12)'
-                } else if (b % 2 === 1) {
-                  ctx.fillStyle = 'rgba(76, 216, 176, 0.05)'
-                } else {
-                  ctx.fillStyle = 'rgba(76, 216, 176, 0.08)'
+                if (subEnd >= tMin && subStart <= tMax) {
+                  const x1 = Math.max(0, ((subStart - tMin) / windowDuration) * w)
+                  const x2 = Math.min(w, ((subEnd - tMin) / windowDuration) * w)
+                  ctx.fillStyle = sub.color
+                  ctx.fillRect(x1, 0, x2 - x1, h)
                 }
-                ctx.fillRect(x1, 0, x2 - x1, h)
-              }
+              })
             }
-            // Move to next bar
             tempT = barEnd + 0.01
           } else {
             tempT += barInterval
@@ -1118,7 +1163,6 @@ function App() {
 
       // Draw high definition waveform from zoomWaveform
       if (zoomWaveform) {
-        // Render columns
         const colWidth = 2
         const gap = 1
         const step = colWidth + gap
@@ -1126,10 +1170,8 @@ function App() {
 
         for (let col = 0; col < numCols; col++) {
           const colX = col * step
-          // Find time at this x coordinate
           const t = tMin + (colX / w) * windowDuration
           if (t >= 0 && t <= duration) {
-            // Interpolate smoothly between adjacent bins to prevent flickering
             const sampleIdx = (t / duration) * (zoomWaveform.length - 1)
             const idxL = Math.floor(sampleIdx)
             const idxR = Math.ceil(sampleIdx)
@@ -1139,7 +1181,6 @@ function App() {
             const barH = Math.min(1.0, val * 2.0) * (h - 10)
             const y = (h - barH) / 2
 
-            // Draw active/inactive color based on if it's past cur
             if (t <= cur) {
               ctx.fillStyle = '#4cd8b0' // active
             } else {
@@ -1150,29 +1191,59 @@ function App() {
         }
       }
 
-      // Draw Beat 1 grid lines
-      beat1Times.forEach((time) => {
-        if (time >= tMin && time <= tMax) {
-          const x = ((time - tMin) / windowDuration) * w
-          const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
-            ? currentTrack.tappedBeat1s.some(t => Math.abs(time - t) < 0.1)
-            : ((currentTrack.beatPairs?.some(
-              pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
-            ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
+      // Draw subdivision grid lines and labels
+      if (beat1Times.length > 0) {
+        let tempT = tMin - barInterval * 2
+        let limit = 0
+        const subs = getBarSubdivisions(currentTrack.danceType)
 
-          ctx.strokeStyle = isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.4)'
-          ctx.lineWidth = isRegistered ? 2 : 1
-          ctx.beginPath()
-          ctx.moveTo(x, 0)
-          ctx.lineTo(x, h)
-          ctx.stroke()
+        while (tempT <= tMax && limit < 100) {
+          limit++
+          const info = getBeatInfoAtTime(tempT)
+          if (info) {
+            const { barStart, barEnd } = info
+            const barDur = barEnd - barStart
 
-          // Draw small text label for the beat
-          ctx.fillStyle = isRegistered ? '#ffd56b' : '#a0b2bd'
-          ctx.font = '9px sans-serif'
-          ctx.fillText(`Beat 1`, x + 4, 15)
+            if (barEnd >= tMin && barStart <= tMax) {
+              subs.forEach((sub) => {
+                const subStart = barStart + sub.startPct * barDur
+
+                if (subStart >= tMin && subStart <= tMax) {
+                  const x = ((subStart - tMin) / windowDuration) * w
+                  const isBeat1 = sub.startPct === 0.0
+                  const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
+                    ? currentTrack.tappedBeat1s.some(t => Math.abs(barStart - t) < 0.1)
+                    : ((currentTrack.beatPairs?.some(
+                      pair => Math.abs(barStart - pair.t1) < 0.5 || Math.abs(barStart - pair.t2) < 0.5
+                    ) || (currentTrack.lateBeatSec !== undefined && Math.abs(barStart - currentTrack.lateBeatSec) < 0.5)))
+
+                  if (isBeat1) {
+                    ctx.strokeStyle = isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.4)'
+                    ctx.lineWidth = isRegistered ? 2 : 1
+                  } else {
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)'
+                    ctx.lineWidth = 0.5
+                  }
+
+                  ctx.beginPath()
+                  ctx.moveTo(x, 0)
+                  ctx.lineTo(x, h)
+                  ctx.stroke()
+
+                  ctx.fillStyle = isBeat1
+                    ? (isRegistered ? '#ffd56b' : '#a0b2bd')
+                    : 'rgba(160, 178, 189, 0.6)'
+                  ctx.font = isBeat1 ? 'bold 10px sans-serif' : '9px sans-serif'
+                  ctx.fillText(isBeat1 ? `Beat 1` : sub.label, x + 4, 15)
+                }
+              })
+            }
+            tempT = barEnd + 0.01
+          } else {
+            tempT += barInterval
+          }
         }
-      })
+      }
 
       // Draw Center Playhead line
       ctx.strokeStyle = '#ff7043'
@@ -1202,7 +1273,7 @@ function App() {
         zoomAnimationFrameRef.current = null
       }
     }
-  }, [currentTrack, beat1Times, zoomBarsCount, mainCurrentTime, mainDuration])
+  }, [currentTrack, beat1Times, zoomBarsCount, mainCurrentTime, mainDuration, zoomWaveform])
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return
