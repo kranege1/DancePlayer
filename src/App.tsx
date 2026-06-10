@@ -281,7 +281,6 @@ function App() {
 
 
   const [tapTimes, setTapTimes] = useState<number[]>([])
-  const decodedAudioBufferRef = useRef<AudioBuffer | null>(null)
   const [dancePlaylistSorts, setDancePlaylistSorts] = useState<Record<string, 'name' | 'stars'>>(() => persistedState.dancePlaylistSorts ?? {})
   const [activeEntryId, setActiveEntryId] = useState<string | null>(null)
   const [breakSecondsLeft, setBreakSecondsLeft] = useState<number | null>(null)
@@ -865,7 +864,6 @@ function App() {
     setTapTimes([])
     if (!currentTrack) {
       setZoomWaveform(null)
-      decodedAudioBufferRef.current = null
       return
     }
 
@@ -2132,7 +2130,6 @@ function App() {
   async function loadWaveform(file: File) {
     try {
       setZoomWaveform(null)
-      decodedAudioBufferRef.current = null
 
       const arrayBuffer = await file.arrayBuffer()
       
@@ -2191,8 +2188,6 @@ function App() {
         throw decodeError || new Error('All audio context decode attempts failed')
       }
 
-      decodedAudioBufferRef.current = audioBuffer
-
       const rawData = audioBuffer.getChannelData(0)
       const len = rawData.length
 
@@ -2220,7 +2215,6 @@ function App() {
     } catch (err) {
       console.error('Failed to generate waveform:', err)
       setZoomWaveform(null)
-      decodedAudioBufferRef.current = null
     }
   }
 
@@ -2453,57 +2447,13 @@ function App() {
     setSettings((prev) => ({ ...prev, speedPct: clampSpeed(prev.speedPct + delta) }))
   }
 
-  function findWavePeak(t: number): number {
-    const audioBuffer = decodedAudioBufferRef.current
-    if (!audioBuffer) {
-      const latencySec = (settings.tapLatencyMs ?? 100) / 1000
-      return t - latencySec
-    }
-
-    try {
-      const channelData = audioBuffer.getChannelData(0)
-      const sampleRate = audioBuffer.sampleRate
-
-      // Look in a 400ms window: t - 350ms to t + 50ms
-      const startSec = t - 0.35
-      const endSec = t + 0.05
-
-      const startSample = Math.max(0, Math.floor(startSec * sampleRate))
-      const endSample = Math.min(channelData.length - 1, Math.floor(endSec * sampleRate))
-
-      const chunkSize = Math.floor(0.005 * sampleRate) // 5ms chunks
-      let maxEnergy = -1
-      let peakTime = t - 0.15 // fallback
-
-      for (let i = startSample; i < endSample; i += chunkSize) {
-        let sum = 0
-        const count = Math.min(chunkSize, endSample - i)
-        if (count <= 0) break
-
-        for (let j = 0; j < count; j++) {
-          sum += Math.abs(channelData[i + j])
-        }
-        const avg = sum / count
-        if (avg > maxEnergy) {
-          maxEnergy = avg
-          peakTime = (i + count / 2) / sampleRate
-        }
-      }
-
-      console.log(`Snapped tap time ${t.toFixed(3)}s to peak at ${peakTime.toFixed(3)}s (diff: ${((t - peakTime) * 1000).toFixed(0)}ms)`)
-      return peakTime
-    } catch (err) {
-      console.error('Failed to find wave peak:', err)
-      const latencySec = (settings.tapLatencyMs ?? 100) / 1000
-      return t - latencySec
-    }
-  }
-
   function handleTapBeat1() {
     if (!currentTrack) return
     const audio = audioRef.current
     if (!audio) return
     const curTime = audio.currentTime
+    const latencySec = (settings.tapLatencyMs ?? 100) / 1000
+    const adjustTime = (t: number) => Math.max(0, t - latencySec)
 
     const existingTapped = currentTrack.tappedBeat1s || []
 
@@ -2523,19 +2473,19 @@ function App() {
       const isSecondOfPair = lastTap !== undefined && (curTime - lastTap) < 5.0
 
       if (isSecondOfPair) {
-        const t1Snapped = findWavePeak(lastTap)
-        const t2Snapped = findWavePeak(curTime)
+        const t1Adjusted = adjustTime(lastTap)
+        const t2Adjusted = adjustTime(curTime)
         const newPair: BeatPair = {
-          t1: t1Snapped,
-          t2: t2Snapped
+          t1: t1Adjusted,
+          t2: t2Adjusted
         }
-        const updatedList = [t1Snapped, t2Snapped].sort((a, b) => a - b)
+        const updatedList = [t1Adjusted, t2Adjusted].sort((a, b) => a - b)
         setTapTimes([])
         updateTrack(currentTrack.id, {
           beatPairs: [newPair],
           tappedBeat1s: updatedList
         })
-        const pairInterval = t2Snapped - t1Snapped
+        const pairInterval = t2Adjusted - t1Adjusted
         const calculatedBpm = Math.round(60 / pairInterval)
         setStatus(`Initial beat pair registered! Local tempo: ${calculatedBpm} Bars/Min (${Math.round(calculatedBpm * BEATS_PER_BAR[currentTrack.danceType])} BPM). You can now tap Beat 1 again at other points to add additional reference anchors.`)
       } else {
@@ -2544,13 +2494,13 @@ function App() {
       }
     } else {
       // 3rd or subsequent Tap: Add another reference anchor
-      const snappedTime = findWavePeak(curTime)
-      if (currentTappedList.some(t => Math.abs(t - snappedTime) < 0.1)) {
+      const adjustedTime = adjustTime(curTime)
+      if (currentTappedList.some(t => Math.abs(t - adjustedTime) < 0.1)) {
         setStatus("Beat 1 already registered near this position.")
         return
       }
 
-      const updatedList = [...currentTappedList, snappedTime].sort((a, b) => a - b)
+      const updatedList = [...currentTappedList, adjustedTime].sort((a, b) => a - b)
 
       // Keep beatPairs and lateBeatSec updated for compatibility with older code/UI
       const firstPair: BeatPair = {
@@ -2564,7 +2514,7 @@ function App() {
         lateBeatSec: lastTapped,
         tappedBeat1s: updatedList
       })
-      setStatus(`Added Beat 1 reference anchor at ${formatTime(snappedTime)}. Total anchors: ${updatedList.length}. Grid re-interpolated!`)
+      setStatus(`Added Beat 1 reference anchor at ${formatTime(adjustedTime)}. Total anchors: ${updatedList.length}. Grid re-interpolated!`)
     }
   }
 
