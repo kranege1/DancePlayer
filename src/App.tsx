@@ -227,13 +227,13 @@ function playBeep() {
     const gain = audioCtx.createGain()
     osc.connect(gain)
     gain.connect(audioCtx.destination)
-    
+
     const now = audioCtx.currentTime
     osc.frequency.setValueAtTime(800, now)
     gain.gain.setValueAtTime(0, now)
     gain.gain.linearRampToValueAtTime(0.3, now + 0.01)
     gain.gain.exponentialRampToValueAtTime(0.00001, now + 0.12)
-    
+
     osc.start(now)
     osc.stop(now + 0.12)
   } catch (err) {
@@ -333,11 +333,11 @@ function App() {
     if (calibrationTimerRef.current) {
       clearTimeout(calibrationTimerRef.current)
     }
-    
+
     let beepsPlayed = 0
     const maxBeeps = 25
     const interval = 1200
-    
+
     const nextBeep = () => {
       if (calibrationTapsRef.current.length >= 10 || beepsPlayed >= maxBeeps) {
         setTimeout(() => {
@@ -345,14 +345,14 @@ function App() {
         }, 800)
         return
       }
-      
+
       playBeep()
       const now = performance.now()
       calibrationBeepsRef.current.push(now)
       beepsPlayed++
       calibrationTimerRef.current = setTimeout(nextBeep, interval)
     }
-    
+
     calibrationTimerRef.current = setTimeout(nextBeep, 800)
   }
 
@@ -385,7 +385,7 @@ function App() {
         }
       }
     })
-    
+
     if (diffs.length > 0) {
       const avg = diffs.reduce((a, b) => a + b, 0) / diffs.length
       const finalLatency = Math.max(0, Math.min(400, Math.round(avg / 10) * 10))
@@ -624,7 +624,7 @@ function App() {
     const I_ref = Math.max(0.1, (anchors[1] - anchors[0]) + fineTuneOffset)
 
     const list: number[] = []
-    
+
     // Add the first anchor
     list.push(anchors[0])
 
@@ -679,7 +679,7 @@ function App() {
 
     let barStart = beat1Times[0]
     let barEnd = beat1Times[1] ?? (barStart + 2.0)
-    
+
     if (cur < beat1Times[0]) {
       const interval = (beat1Times[1] ?? (beat1Times[0] + 2.0)) - beat1Times[0]
       const elapsed = beat1Times[0] - cur
@@ -689,9 +689,9 @@ function App() {
     } else {
       let found = false
       for (let i = 0; i < beat1Times.length - 1; i++) {
-        if (cur >= beat1Times[i] && cur < beat1Times[i+1]) {
+        if (cur >= beat1Times[i] && cur < beat1Times[i + 1]) {
           barStart = beat1Times[i]
-          barEnd = beat1Times[i+1]
+          barEnd = beat1Times[i + 1]
           found = true
           break
         }
@@ -726,10 +726,10 @@ function App() {
     // Calculate barIndex and beatDuration
     let barStart = beat1Times[0]
     let barEnd = beat1Times[1] ?? (barStart + 2.0)
-    
+
     let interval = barEnd - barStart
     let barIndex = 0
-    
+
     if (cur < beat1Times[0]) {
       const elapsed = beat1Times[0] - cur
       const barsBefore = Math.ceil(elapsed / interval)
@@ -739,9 +739,9 @@ function App() {
     } else {
       let found = false
       for (let i = 0; i < beat1Times.length - 1; i++) {
-        if (cur >= beat1Times[i] && cur < beat1Times[i+1]) {
+        if (cur >= beat1Times[i] && cur < beat1Times[i + 1]) {
           barStart = beat1Times[i]
-          barEnd = beat1Times[i+1]
+          barEnd = beat1Times[i + 1]
           interval = barEnd - barStart
           barIndex = i
           found = true
@@ -945,7 +945,7 @@ function App() {
 
         let barStart = beat1Times[0]
         let barEnd = beat1Times[1] ?? (barStart + 2.0)
-        
+
         if (t < beat1Times[0]) {
           const interval = (beat1Times[1] ?? (beat1Times[0] + 2.0)) - beat1Times[0]
           const elapsed = beat1Times[0] - t
@@ -955,9 +955,9 @@ function App() {
         } else {
           let found = false
           for (let i = 0; i < beat1Times.length - 1; i++) {
-            if (t >= beat1Times[i] && t < beat1Times[i+1]) {
+            if (t >= beat1Times[i] && t < beat1Times[i + 1]) {
               barStart = beat1Times[i]
-              barEnd = beat1Times[i+1]
+              barEnd = beat1Times[i + 1]
               found = true
               break
             }
@@ -1060,7 +1060,7 @@ function App() {
             span.style.color = isActive ? '#ff7043' : '#6f8a99'
             span.style.textShadow = isActive ? '0 0 6px rgba(255, 112, 67, 0.4)' : 'none'
             span.style.borderBottom = '2px solid ' + (isActive ? '#ff7043' : 'transparent')
-            
+
             const nextBar = span.nextSibling as HTMLDivElement
             if (nextBar) {
               nextBar.style.background = isActive ? '#ff7043' : 'rgba(255,255,255,0.1)'
@@ -1084,11 +1084,11 @@ function App() {
             for (let b = 0; b < beatsPerBar; b++) {
               const bStart = barStart + b * beatDuration
               const bEnd = bStart + beatDuration
-              
+
               if (bEnd >= tMin && bStart <= tMax) {
                 const x1 = Math.max(0, ((bStart - tMin) / windowDuration) * w)
                 const x2 = Math.min(w, ((bEnd - tMin) / windowDuration) * w)
-                
+
                 // Color mapping: Beat 1 is soft coral/orange, others are soft green/teal
                 if (b === 0) {
                   ctx.fillStyle = 'rgba(255, 112, 67, 0.12)'
@@ -1138,7 +1138,7 @@ function App() {
 
             const barH = Math.min(1.0, val * 2.0) * (h - 10)
             const y = (h - barH) / 2
-            
+
             // Draw active/inactive color based on if it's past cur
             if (t <= cur) {
               ctx.fillStyle = '#4cd8b0' // active
@@ -1157,8 +1157,8 @@ function App() {
           const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
             ? currentTrack.tappedBeat1s.some(t => Math.abs(time - t) < 0.1)
             : ((currentTrack.beatPairs?.some(
-                pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
-              ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
+              pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
+            ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
 
           ctx.strokeStyle = isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.4)'
           ctx.lineWidth = isRegistered ? 2 : 1
@@ -2062,15 +2062,69 @@ function App() {
     try {
       setZoomWaveform(null)
       decodedAudioBufferRef.current = null
-      
+
       const arrayBuffer = await file.arrayBuffer()
-      const offlineCtx = new OfflineAudioContext(1, 44100, 44100)
-      const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer)
-      decodedAudioBufferRef.current = audioBuffer
       
+      let audioBuffer: AudioBuffer | null = null
+      let decodeError: any = null
+
+      const contextFactories = [
+        () => sharedAudioCtxRef.current,
+        () => {
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+          return AudioContextClass ? new AudioContextClass() : null
+        },
+        () => {
+          const OfflineContextClass = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext
+          return OfflineContextClass ? new OfflineContextClass(1, 100, 44100) : null
+        },
+        () => {
+          const OfflineContextClass = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext
+          return OfflineContextClass ? new OfflineContextClass(1, 100, 48000) : null
+        }
+      ]
+
+      for (let i = 0; i < contextFactories.length; i++) {
+        const getCtx = contextFactories[i]
+        let ctx: BaseAudioContext | null = null
+        try {
+          ctx = getCtx()
+        } catch (e) {
+          continue
+        }
+        if (!ctx) continue
+
+        const bufferCopy = arrayBuffer.slice(0)
+        try {
+          audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
+            try {
+              const p = ctx!.decodeAudioData(bufferCopy, resolve, (err) => {
+                reject(err || new Error('decodeAudioData callback failed'))
+              })
+              if (p && typeof p.catch === 'function') {
+                p.catch(reject)
+              }
+            } catch (err) {
+              reject(err)
+            }
+          })
+          if (audioBuffer) {
+            break
+          }
+        } catch (err) {
+          decodeError = err
+        }
+      }
+
+      if (!audioBuffer) {
+        throw decodeError || new Error('All audio context decode attempts failed')
+      }
+
+      decodedAudioBufferRef.current = audioBuffer
+
       const rawData = audioBuffer.getChannelData(0)
       const len = rawData.length
-      
+
       // Step stride of 16 reduces main thread block by 16x
       const stride = 16
 
@@ -2334,27 +2388,27 @@ function App() {
       const latencySec = (settings.tapLatencyMs ?? 100) / 1000
       return t - latencySec
     }
-    
+
     try {
       const channelData = audioBuffer.getChannelData(0)
       const sampleRate = audioBuffer.sampleRate
-      
+
       // Look in a 400ms window: t - 350ms to t + 50ms
       const startSec = t - 0.35
       const endSec = t + 0.05
-      
+
       const startSample = Math.max(0, Math.floor(startSec * sampleRate))
       const endSample = Math.min(channelData.length - 1, Math.floor(endSec * sampleRate))
-      
+
       const chunkSize = Math.floor(0.005 * sampleRate) // 5ms chunks
       let maxEnergy = -1
       let peakTime = t - 0.15 // fallback
-      
+
       for (let i = startSample; i < endSample; i += chunkSize) {
         let sum = 0
         const count = Math.min(chunkSize, endSample - i)
         if (count <= 0) break
-        
+
         for (let j = 0; j < count; j++) {
           sum += Math.abs(channelData[i + j])
         }
@@ -2364,8 +2418,8 @@ function App() {
           peakTime = (i + count / 2) / sampleRate
         }
       }
-      
-      console.log(`Snapped tap time ${t.toFixed(3)}s to peak at ${peakTime.toFixed(3)}s (diff: ${((t - peakTime)*1000).toFixed(0)}ms)`)
+
+      console.log(`Snapped tap time ${t.toFixed(3)}s to peak at ${peakTime.toFixed(3)}s (diff: ${((t - peakTime) * 1000).toFixed(0)}ms)`)
       return peakTime
     } catch (err) {
       console.error('Failed to find wave peak:', err)
@@ -2381,7 +2435,7 @@ function App() {
     const curTime = audio.currentTime
 
     const existingTapped = currentTrack.tappedBeat1s || []
-    
+
     // Fallback/backward compatibility check: if tappedBeat1s is empty but beatPairs has elements, initialize tappedBeat1s
     let currentTappedList = [...existingTapped]
     if (currentTappedList.length === 0 && currentTrack.beatPairs && currentTrack.beatPairs.length > 0) {
@@ -2424,9 +2478,9 @@ function App() {
         setStatus("Beat 1 already registered near this position.")
         return
       }
-      
+
       const updatedList = [...currentTappedList, snappedTime].sort((a, b) => a - b)
-      
+
       // Keep beatPairs and lateBeatSec updated for compatibility with older code/UI
       const firstPair: BeatPair = {
         t1: updatedList[0],
@@ -3220,8 +3274,8 @@ function App() {
                             const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
                               ? currentTrack.tappedBeat1s.some(t => Math.abs(time - t) < 0.1)
                               : ((currentTrack.beatPairs?.some(
-                                  pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
-                                ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
+                                pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
+                              ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
                             if (!isRegistered) return null
                             return (
                               <div
@@ -3309,8 +3363,8 @@ function App() {
                             const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
                               ? currentTrack.tappedBeat1s.some(t => Math.abs(time - t) < 0.1)
                               : ((currentTrack.beatPairs?.some(
-                                  pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
-                                ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
+                                pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
+                              ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
                             if (!isRegistered) return null
                             return (
                               <div
@@ -3504,7 +3558,7 @@ function App() {
                           '🎯 Align Late Beat 1'
                         )}
                       </button>
-                      
+
                       {((currentTrack.beatPairs && currentTrack.beatPairs.length > 0) || currentTrack.lateBeatSec !== undefined) && (
                         <button
                           type="button"
@@ -4565,7 +4619,7 @@ function App() {
         <div className="edit-modal-overlay" style={{ zIndex: 1200 }} onClick={cancelCalibration}>
           <div className="edit-modal" style={{ background: '#0b1f2a', color: '#fff9ef', border: '1px solid rgba(255,255,255,0.1)', textAlign: 'center', padding: '24px' }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ margin: '0 0 12px', fontSize: '1.2rem', color: '#ffd56b' }}>⚡ Latency Calibration</h3>
-            
+
             <p style={{ fontSize: '0.9rem', color: '#a0b2bd', lineHeight: '1.4', margin: '0 0 20px' }}>
               We will play rhythmic clicks. Tap the big button below (or press your <strong>Spacebar</strong>) exactly on each click sound until you have completed 10 taps.
             </p>
