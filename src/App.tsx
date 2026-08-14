@@ -84,6 +84,119 @@ function createId(prefix: string) {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+const DANCE_FOLDER_ALIASES: Record<DanceType, string[]> = {
+  Samba: ['samba', 'sb', 'sa', 'sam'],
+  ChaCha: ['chacha', 'cha-cha', 'cha cha', 'cc', 'cha'],
+  Rumba: ['rumba', 'rhumba', 'ru', 'rum'],
+  'Paso Doble': ['paso doble', 'pasodoble', 'paso-doble', 'paso', 'pd'],
+  Jive: ['jive', 'ji', 'jv'],
+  Waltz: ['waltz', 'walzer', 'langsamer walzer', 'langsamerwalzer', 'slow waltz', 'english waltz', 'lw', 'ew', 'english-waltz', 'slow-waltz'],
+  Tango: ['tango', 'tg', 'ta', 'tan'],
+  'Viennese Waltz': ['viennese waltz', 'wiener walzer', 'wienerwalzer', 'ww', 'vw', 'viennese', 'v-waltz', 'viennese-waltz'],
+  Foxtrot: ['foxtrot', 'slowfox', 'slow fox', 'fox', 'ft', 'sf', 'slow-fox'],
+  Quickstep: ['quickstep', 'quick step', 'qs', 'quick'],
+  Other: ['other', 'sonstige', 'diverses']
+}
+
+const LATIN_DANCE_LIST: DanceType[] = ['Samba', 'ChaCha', 'Rumba', 'Paso Doble', 'Jive']
+const STANDARD_DANCE_LIST: DanceType[] = ['Waltz', 'Tango', 'Viennese Waltz', 'Foxtrot', 'Quickstep']
+
+function detectDanceFromRelativePath(relativePath: string): DanceType | null {
+  if (!relativePath) return null
+  const parts = relativePath.split(/[/\\]/)
+  const dirSegments = parts.slice(0, -1)
+  for (const segment of dirSegments) {
+    let cleaned = segment.trim().toLowerCase()
+    cleaned = cleaned.replace(/^[0-9]+[\s._\-]+/, '').replace(/[\s._\-]+[0-9]+$/, '').trim()
+
+    // 1. Exact match against aliases
+    for (const [dance, aliases] of Object.entries(DANCE_FOLDER_ALIASES)) {
+      if (aliases.includes(cleaned)) {
+        return dance as DanceType
+      }
+    }
+
+    // 2. Sub-token search
+    const subTokens = cleaned.split(/[\s._\-]+/)
+    for (const token of subTokens) {
+      if (!token) continue
+      for (const [dance, aliases] of Object.entries(DANCE_FOLDER_ALIASES)) {
+        if (aliases.includes(token)) {
+          return dance as DanceType
+        }
+      }
+    }
+  }
+  return null
+}
+
+async function extractFileStarRating(file: File): Promise<number> {
+  try {
+    const metadata = await mm.parseBlob(file)
+    let initialRating = 0
+    let popmFound = false
+
+    const nativeFormats = ['ID3v2.3', 'ID3v2.4', 'ID3v2.2']
+    for (const format of nativeFormats) {
+      const tags = metadata.native[format]
+      if (tags) {
+        const popmTag = tags.find((t) => t.id === 'POPM')
+        if (popmTag && popmTag.value) {
+          let rawRating = 0
+          if (typeof popmTag.value === 'object' && popmTag.value !== null) {
+            rawRating = (popmTag.value as any).rating ?? 0
+          } else if (typeof popmTag.value === 'number') {
+            rawRating = popmTag.value
+          }
+
+          if (rawRating > 0) {
+            if (rawRating <= 63) initialRating = 1
+            else if (rawRating <= 127) initialRating = 2
+            else if (rawRating <= 195) initialRating = 3
+            else if (rawRating <= 254) initialRating = 4
+            else if (rawRating === 255) initialRating = 5
+            popmFound = true
+            break
+          }
+        }
+      }
+    }
+
+    if (!popmFound) {
+      const ratings = metadata.common.rating
+      if (ratings && ratings.length > 0) {
+        const r = ratings[0].rating
+        if (r > 1) {
+          initialRating = Math.round((r / 255) * 5)
+        } else {
+          initialRating = Math.round(r * 5)
+        }
+      }
+    }
+    return Math.min(5, Math.max(0, initialRating))
+  } catch (err) {
+    return 0
+  }
+}
+
+interface ScannedFolderFile {
+  file: File
+  hash?: string
+  danceType: DanceType
+  rating: number
+}
+
+interface StructuredFolderImportDialog {
+  hasAllLatin: boolean
+  hasAllStandard: boolean
+  missingLatin: DanceType[]
+  missingStandard: DanceType[]
+  scannedFiles: ScannedFolderFile[]
+  nonFolderFiles: { file: File; hash?: string }[]
+  selectedRatings: Record<number, boolean>
+  skippedCount: number
+}
+
 function clampSpeed(value: number) {
   return Math.max(-30, Math.min(30, Math.round(value)))
 }
@@ -418,6 +531,7 @@ function App() {
   }, [isCalibratingLatency])
 
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null)
+  const [structuredImportDialog, setStructuredImportDialog] = useState<StructuredFolderImportDialog | null>(null)
   const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>(() => persistedState.dancePlaylists ?? [])
   const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>(() => persistedState.savedPlaylists ?? [])
   const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('player')
@@ -1377,131 +1491,21 @@ function App() {
     setStatus(`Deleted ${idsToDelete.length} track(s) from staging library and device storage.`)
   }
 
-  async function handleImport(event: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? [])
-    if (!files.length) return
-
-    const accepted = files.filter((file) => {
-      const name = file.name.toLowerCase()
-      return ['.mp3', '.wav', '.aac', '.m4a', '.aiff'].some((ext) => name.endsWith(ext))
-    })
-
-    if (!accepted.length) {
-      setStatus('No supported files selected (mp3, wav, aac, m4a, aiff).')
+  async function processImportFiles(
+    itemsToImport: Array<{ file: File; hash?: string; forcedDanceType?: DanceType; preParsedRating?: number }>,
+    skippedCount: number = 0
+  ) {
+    if (!itemsToImport.length) {
+      setImportProgress(null)
+      setStatus('No new tracks selected for import.')
       return
     }
 
-    // Compute hashes for all accepted files to check for duplicates
-    setStatus('Checking for duplicate files...')
-    const fileHashes = await Promise.all(accepted.map(async (file) => {
-      try {
-        const hash = await computeFileHash(file)
-        return { file, hash }
-      } catch (err) {
-        console.error('Failed to compute hash for file:', file.name, err)
-        return { file, hash: undefined }
-      }
-    }))
-
-    const newFiles = fileHashes.filter(({ file, hash }) => {
-      const isDuplicate = tracks.some((t) => {
-        if (hash && t.hash) {
-          return t.hash === hash
-        }
-        const nameNoExt = file.name.replace(/\.[^.]+$/, '').trim().toLowerCase()
-        return t.title.trim().toLowerCase() === nameNoExt
-      })
-      return !isDuplicate
-    })
-
-    const skippedCount = accepted.length - newFiles.length
-
-    // Update ratings for existing duplicate files if they have POPM rating tags in file
-    const duplicateFiles = fileHashes.filter(({ file, hash }) => {
-      return tracks.some((t) => {
-        if (hash && t.hash) {
-          return t.hash === hash
-        }
-        const nameNoExt = file.name.replace(/\.[^.]+$/, '').trim().toLowerCase()
-        return t.title.trim().toLowerCase() === nameNoExt
-      })
-    })
-
-    if (duplicateFiles.length > 0) {
-      // Parse duplicate files asynchronously to check if ratings need updating
-      void Promise.all(duplicateFiles.map(async ({ file, hash }) => {
-        try {
-          const metadata = await mm.parseBlob(file)
-          let initialRating = 0
-          let popmFound = false
-
-          // 1. Prioritize native ID3v2 structures for POPM frame (desktop helper app values)
-          const nativeFormats = ['ID3v2.3', 'ID3v2.4', 'ID3v2.2']
-          for (const format of nativeFormats) {
-            const tags = metadata.native[format]
-            if (tags) {
-              const popmTag = tags.find(t => t.id === 'POPM')
-              if (popmTag && popmTag.value) {
-                let rawRating = 0
-                if (typeof popmTag.value === 'object' && popmTag.value !== null) {
-                  rawRating = (popmTag.value as any).rating ?? 0
-                } else if (typeof popmTag.value === 'number') {
-                  rawRating = popmTag.value
-                }
-
-                if (rawRating > 0) {
-                  if (rawRating <= 63) initialRating = 1
-                  else if (rawRating <= 127) initialRating = 2
-                  else if (rawRating <= 195) initialRating = 3
-                  else if (rawRating <= 254) initialRating = 4
-                  else if (rawRating === 255) initialRating = 5
-                  popmFound = true
-                  break
-                }
-              }
-            }
-          }
-
-          // 2. Fallback: Check common rating mapping
-          if (!popmFound) {
-            const ratings = metadata.common.rating
-            if (ratings && ratings.length > 0) {
-              const r = ratings[0].rating
-              if (r > 1) {
-                initialRating = Math.round((r / 255) * 5)
-              } else {
-                initialRating = Math.round(r * 5)
-              }
-            }
-          }
-
-          if (initialRating > 0) {
-            setTracks(prev => prev.map(t => {
-              const matches = (hash && t.hash === hash) || (t.filename === file.name)
-              if (matches && t.qualityRating !== initialRating) {
-                return { ...t, qualityRating: initialRating }
-              }
-              return t
-            }))
-          }
-        } catch (err) {
-          console.warn('Failed to parse duplicate file metadata for rating update:', file.name, err)
-        }
-      })).then(() => {
-        setStatus(`Staged library ratings updated from selected files.`)
-      })
-    }
-
-    if (!newFiles.length) {
-      event.target.value = ''
-      return
-    }
-    const filesToImport = newFiles.map(nf => nf.file)
-    const filesToImportHashes = newFiles.map(nf => nf.hash)
+    const filesToImport = itemsToImport.map((item) => item.file)
+    const filesToImportHashes = itemsToImport.map((item) => item.hash)
 
     setImportProgress({ done: 0, total: filesToImport.length })
 
-    // ── Grok batch parse (one API call for all files) ────────────────────────
     let grokResults: (GrokTrackInfo | null)[] = filesToImport.map(() => null)
     if (settings.grokApiKey && navigator.onLine) {
       try {
@@ -1510,7 +1514,6 @@ function App() {
           filesToImport.map((f) => f.name.replace(/\.[^.]+$/, '')),
           settings.grokApiKey,
         )
-        console.log('🤖 Grok batch results:', grokResults)
       } catch (err) {
         console.warn('Grok batch parse failed, falling back to local analysis:', err)
       }
@@ -1528,7 +1531,8 @@ function App() {
     }
 
     for (let i = 0; i < filesToImport.length; i++) {
-      const file = filesToImport[i]
+      const item = itemsToImport[i]
+      const file = item.file
       setImportProgress({ done: i + 1, total: filesToImport.length })
       setStatus(`Analysing ${i + 1} of ${filesToImport.length}: ${file.name.replace(/\.[^.]+$/, '')}`)
 
@@ -1546,45 +1550,47 @@ function App() {
       const rawName = file.name.replace(/\.[^.]+$/, '')
       const { title: regexTitle, artist: regexArtist, danceHint: regexDanceHint } = extractArtistFromFilename(rawName)
 
-      // Merge Grok result (if available) with regex result — Grok wins on title/artist/dance
       const grok = grokResults[i]
       const parsedTitle = grok?.title ?? regexTitle
       const parsedArtist = grok?.artist ?? regexArtist
-      const danceHint = grok?.danceType ?? regexDanceHint
+      const danceHint = item.forcedDanceType ?? grok?.danceType ?? regexDanceHint
 
-      // Step 1: quick local analysis from filename
-      const localAnalysis = await analyzeTrackRhythm(file, {
-        title: rawName,
-        fileName: file.name,
-        danceHint,
-      })
-
-      // Step 2: MusicBrainz web lookup (non-blocking, best-effort, only when online)
       let finalTitle = parsedTitle
       let finalArtist = parsedArtist
-      let finalDanceType = localAnalysis.danceType
-      let finalConfidence = localAnalysis.confidence
+      let finalDanceType: DanceType
+      let finalConfidence: number
 
-      if (navigator.onLine && parsedArtist) {
-        setStatus(`Checking online metadata ${i + 1} of ${filesToImport.length}: ${parsedTitle}`)
-        const mbResult = await lookupTrackOnMusicBrainz(parsedArtist, parsedTitle)
-        if (mbResult && mbResult.matchConfidence >= 0.5) {
-          // Use canonical MB names only if MB is fairly confident
-          finalTitle = mbResult.title
-          finalArtist = mbResult.artist
-          // Re-run analysis enriched with MB genre tags
-          if (mbResult.genres.length > 0) {
-            const enrichedAnalysis = await analyzeTrackRhythm(file, {
-              title: mbResult.title,
-              artist: mbResult.artist,
-              fileName: file.name,
-              genres: mbResult.genres,
-              danceHint,
-            })
-            // Only upgrade dance type if the enriched run is more confident
-            if (enrichedAnalysis.confidence > localAnalysis.confidence) {
-              finalDanceType = enrichedAnalysis.danceType
-              finalConfidence = Math.min(0.98, enrichedAnalysis.confidence + 0.05) // small bonus for web-confirmed
+      if (item.forcedDanceType) {
+        finalDanceType = item.forcedDanceType
+        finalConfidence = 1.0
+      } else {
+        const localAnalysis = await analyzeTrackRhythm(file, {
+          title: rawName,
+          fileName: file.name,
+          danceHint,
+        })
+
+        finalDanceType = localAnalysis.danceType
+        finalConfidence = localAnalysis.confidence
+
+        if (navigator.onLine && parsedArtist) {
+          setStatus(`Checking online metadata ${i + 1} of ${filesToImport.length}: ${parsedTitle}`)
+          const mbResult = await lookupTrackOnMusicBrainz(parsedArtist, parsedTitle)
+          if (mbResult && mbResult.matchConfidence >= 0.5) {
+            finalTitle = mbResult.title
+            finalArtist = mbResult.artist
+            if (mbResult.genres.length > 0) {
+              const enrichedAnalysis = await analyzeTrackRhythm(file, {
+                title: mbResult.title,
+                artist: mbResult.artist,
+                fileName: file.name,
+                genres: mbResult.genres,
+                danceHint,
+              })
+              if (enrichedAnalysis.confidence > localAnalysis.confidence) {
+                finalDanceType = enrichedAnalysis.danceType
+                finalConfidence = Math.min(0.98, enrichedAnalysis.confidence + 0.05)
+              }
             }
           }
         }
@@ -1592,62 +1598,15 @@ function App() {
 
       const danceType = finalDanceType
       const fileHash = filesToImportHashes[i]
-      const wasRemovedEarlier = removedList.some(item =>
-        (fileHash && item.hash === fileHash) ||
-        (item.filename && item.filename === file.name) ||
-        (item.title && item.title === finalTitle)
+      const wasRemovedEarlier = removedList.some((rec) =>
+        (fileHash && rec.hash === fileHash) ||
+        (rec.filename && rec.filename === file.name) ||
+        (rec.title && rec.title === finalTitle)
       )
 
-      let initialRating = 0
-      try {
-        const metadata = await mm.parseBlob(file)
-        console.log(`[Import] File: ${file.name}`, {
-          common: metadata.common,
-          native: metadata.native
-        })
-        let popmFound = false
-
-        // 1. Prioritize native ID3v2 structures for POPM frame (desktop helper app values)
-        const nativeFormats = ['ID3v2.3', 'ID3v2.4', 'ID3v2.2']
-        for (const format of nativeFormats) {
-          const tags = metadata.native[format]
-          if (tags) {
-            const popmTag = tags.find(t => t.id === 'POPM')
-            if (popmTag && popmTag.value) {
-              let rawRating = 0
-              if (typeof popmTag.value === 'object' && popmTag.value !== null) {
-                rawRating = (popmTag.value as any).rating ?? 0
-              } else if (typeof popmTag.value === 'number') {
-                rawRating = popmTag.value
-              }
-
-              if (rawRating > 0) {
-                if (rawRating <= 63) initialRating = 1
-                else if (rawRating <= 127) initialRating = 2
-                else if (rawRating <= 195) initialRating = 3
-                else if (rawRating <= 254) initialRating = 4
-                else if (rawRating === 255) initialRating = 5
-                popmFound = true
-                break
-              }
-            }
-          }
-        }
-
-        // 2. Fallback: Check common rating mapping
-        if (!popmFound) {
-          const ratings = metadata.common.rating
-          if (ratings && ratings.length > 0) {
-            const r = ratings[0].rating
-            if (r > 1) {
-              initialRating = Math.round((r / 255) * 5)
-            } else {
-              initialRating = Math.round(r * 5)
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('Failed to parse audio tags for rating:', err)
+      let initialRating = item.preParsedRating ?? 0
+      if (item.preParsedRating === undefined) {
+        initialRating = await extractFileStarRating(file)
       }
 
       imported.push({
@@ -1656,6 +1615,7 @@ function App() {
         artist: finalArtist,
         filename: file.name,
         danceType,
+        userConfirmed: !!item.forcedDanceType,
         analysisConfidence: finalConfidence,
         hasCachedAudio: true,
         qualityRating: initialRating,
@@ -1684,8 +1644,188 @@ function App() {
     setStatus(
       lowConfidenceCount > 0
         ? `Imported ${imported.length} track(s). ${lowConfidenceCount} need review in the list.${skippedSuffix}`
-        : `Imported ${imported.length} track(s). Dance type auto-detected from file names.${skippedSuffix}`,
+        : `Imported ${imported.length} track(s). Dance type auto-detected from folder/file names.${skippedSuffix}`
     )
+  }
+
+  async function confirmStructuredImport(importAll: boolean) {
+    if (!structuredImportDialog) return
+    const { scannedFiles, nonFolderFiles, selectedRatings, skippedCount } = structuredImportDialog
+    setStructuredImportDialog(null)
+
+    const selectedScanned = importAll
+      ? scannedFiles
+      : scannedFiles.filter((sf) => selectedRatings[sf.rating])
+
+    const itemsToImport = [
+      ...selectedScanned.map((sf) => ({
+        file: sf.file,
+        hash: sf.hash,
+        forcedDanceType: sf.danceType,
+        preParsedRating: sf.rating,
+      })),
+      ...nonFolderFiles.map((nf) => ({
+        file: nf.file,
+        hash: nf.hash,
+      })),
+    ]
+
+    await processImportFiles(itemsToImport, skippedCount)
+  }
+
+  async function handleImport(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.target.files ?? [])
+    if (!files.length) return
+
+    const accepted = files.filter((file) => {
+      const name = file.name.toLowerCase()
+      return ['.mp3', '.wav', '.aac', '.m4a', '.aiff'].some((ext) => name.endsWith(ext))
+    })
+
+    if (!accepted.length) {
+      setStatus('No supported files selected (mp3, wav, aac, m4a, aiff).')
+      return
+    }
+
+    setStatus('Checking for duplicate files...')
+    const fileHashes = await Promise.all(
+      accepted.map(async (file) => {
+        try {
+          const hash = await computeFileHash(file)
+          return { file, hash }
+        } catch (err) {
+          console.error('Failed to compute hash for file:', file.name, err)
+          return { file, hash: undefined }
+        }
+      })
+    )
+
+    const newFiles = fileHashes.filter(({ file, hash }) => {
+      const isDuplicate = tracks.some((t) => {
+        if (hash && t.hash) {
+          return t.hash === hash
+        }
+        const nameNoExt = file.name.replace(/\.[^.]+$/, '').trim().toLowerCase()
+        return t.title.trim().toLowerCase() === nameNoExt
+      })
+      return !isDuplicate
+    })
+
+    const skippedCount = accepted.length - newFiles.length
+
+    // Update ratings for existing duplicate files if they have POPM rating tags in file
+    const duplicateFiles = fileHashes.filter(({ file, hash }) => {
+      return tracks.some((t) => {
+        if (hash && t.hash) {
+          return t.hash === hash
+        }
+        const nameNoExt = file.name.replace(/\.[^.]+$/, '').trim().toLowerCase()
+        return t.title.trim().toLowerCase() === nameNoExt
+      })
+    })
+
+    if (duplicateFiles.length > 0) {
+      void Promise.all(
+        duplicateFiles.map(async ({ file, hash }) => {
+          try {
+            const initialRating = await extractFileStarRating(file)
+            if (initialRating > 0) {
+              setTracks((prev) =>
+                prev.map((t) => {
+                  const matches = (hash && t.hash === hash) || t.filename === file.name
+                  if (matches && t.qualityRating !== initialRating) {
+                    return { ...t, qualityRating: initialRating }
+                  }
+                  return t
+                })
+              )
+            }
+          } catch (err) {
+            console.warn('Failed to parse duplicate file metadata for rating update:', file.name, err)
+          }
+        })
+      ).then(() => {
+        setStatus(`Staged library ratings updated from selected files.`)
+      })
+    }
+
+    if (!newFiles.length) {
+      event.target.value = ''
+      return
+    }
+
+    const detectedFilesWithDance = newFiles.map(({ file, hash }) => ({
+      file,
+      hash,
+      detectedDance: detectDanceFromRelativePath(file.webkitRelativePath),
+    }))
+
+    const latinMatches = LATIN_DANCE_LIST.filter((dance) =>
+      detectedFilesWithDance.some((f) => f.detectedDance === dance)
+    )
+    const standardMatches = STANDARD_DANCE_LIST.filter((dance) =>
+      detectedFilesWithDance.some((f) => f.detectedDance === dance)
+    )
+
+    const missingLatin = LATIN_DANCE_LIST.filter((dance) => !latinMatches.includes(dance))
+    const missingStandard = STANDARD_DANCE_LIST.filter((dance) => !standardMatches.includes(dance))
+
+    const hasAllLatin = latinMatches.length === 5
+    const hasAllStandard = standardMatches.length === 5
+    const isPartialLatin = latinMatches.length >= 3 && latinMatches.length < 5
+    const isPartialStandard = standardMatches.length >= 3 && standardMatches.length < 5
+
+    if (hasAllLatin || hasAllStandard || isPartialLatin || isPartialStandard) {
+      const folderFiles: Array<{ file: File; hash?: string; detectedDance: DanceType }> = []
+      const nonFolderFiles: Array<{ file: File; hash?: string }> = []
+      for (const item of detectedFilesWithDance) {
+        if (item.detectedDance !== null) {
+          folderFiles.push({ file: item.file, hash: item.hash, detectedDance: item.detectedDance })
+        } else {
+          nonFolderFiles.push({ file: item.file, hash: item.hash })
+        }
+      }
+
+      setStatus(`📂 Scanning star ratings for ${folderFiles.length} tracks in detected dance folders…`)
+      setImportProgress({ done: 0, total: folderFiles.length })
+
+      const scannedFiles: ScannedFolderFile[] = []
+      for (let i = 0; i < folderFiles.length; i++) {
+        const item = folderFiles[i]
+        setImportProgress({ done: i + 1, total: folderFiles.length })
+        const rating = await extractFileStarRating(item.file)
+        scannedFiles.push({
+          file: item.file,
+          hash: item.hash,
+          danceType: item.detectedDance,
+          rating,
+        })
+      }
+
+      setImportProgress(null)
+      event.target.value = ''
+      setStructuredImportDialog({
+        hasAllLatin,
+        hasAllStandard,
+        missingLatin: (hasAllLatin || isPartialLatin) ? missingLatin : [],
+        missingStandard: (hasAllStandard || isPartialStandard) ? missingStandard : [],
+        scannedFiles,
+        nonFolderFiles,
+        selectedRatings: { 5: true, 4: true, 3: false, 2: false, 1: false, 0: false },
+        skippedCount,
+      })
+      return
+    }
+
+    const itemsToImport = newFiles.map(({ file, hash }) => {
+      const pathDance = detectDanceFromRelativePath(file.webkitRelativePath)
+      return {
+        file,
+        hash,
+        forcedDanceType: pathDance ?? undefined,
+      }
+    })
+    await processImportFiles(itemsToImport, skippedCount)
     event.target.value = ''
   }
 
@@ -4725,6 +4865,176 @@ function App() {
                 onClick={cancelCalibration}
               >
                 {calibrationResult === null ? 'Cancel' : 'Close'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {structuredImportDialog && (
+        <div className="edit-modal-overlay" style={{ zIndex: 1200 }} onClick={() => setStructuredImportDialog(null)}>
+          <div
+            className="edit-modal"
+            style={{
+              maxWidth: '680px',
+              width: '92%',
+              background: '#0d222e',
+              color: '#fff9ef',
+              border: '1px solid rgba(255,213,107,0.3)',
+              borderRadius: '12px',
+              padding: '24px',
+              maxHeight: '85vh',
+              overflowY: 'auto',
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 12px', fontSize: '1.25rem', color: '#ffd56b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              📂 Dance Folder Auto-Detection
+            </h3>
+
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '16px' }}>
+              {structuredImportDialog.hasAllLatin && (
+                <span style={{ background: 'rgba(255, 213, 107, 0.15)', color: '#ffd56b', border: '1px solid #ffd56b', padding: '4px 12px', borderRadius: '16px', fontSize: '0.85rem', fontWeight: 600 }}>
+                  💃 All 5 Latin Dances Detected
+                </span>
+              )}
+              {structuredImportDialog.hasAllStandard && (
+                <span style={{ background: 'rgba(74, 222, 128, 0.15)', color: '#4ade80', border: '1px solid #4ade80', padding: '4px 12px', borderRadius: '16px', fontSize: '0.85rem', fontWeight: 600 }}>
+                  🕺 All 5 Standard Dances Detected
+                </span>
+              )}
+            </div>
+
+            {structuredImportDialog.missingLatin.length > 0 && (
+              <div style={{ background: 'rgba(255, 112, 67, 0.15)', color: '#ff8a65', border: '1px solid rgba(255, 112, 67, 0.4)', padding: '10px 14px', borderRadius: '8px', marginBottom: '14px', fontSize: '0.85rem' }}>
+                ⚠️ <strong>Missing Latin Subfolders:</strong> {structuredImportDialog.missingLatin.join(', ')}
+              </div>
+            )}
+
+            {structuredImportDialog.missingStandard.length > 0 && (
+              <div style={{ background: 'rgba(255, 112, 67, 0.15)', color: '#ff8a65', border: '1px solid rgba(255, 112, 67, 0.4)', padding: '10px 14px', borderRadius: '8px', marginBottom: '14px', fontSize: '0.85rem' }}>
+                ⚠️ <strong>Missing Standard Subfolders:</strong> {structuredImportDialog.missingStandard.join(', ')}
+              </div>
+            )}
+
+            <p style={{ fontSize: '0.88rem', color: '#a0b2bd', lineHeight: '1.4', margin: '0 0 16px' }}>
+              We found structured dance subfolders in your selection ({structuredImportDialog.scannedFiles.length} tracks scanned). Select which star ratings you want to import:
+            </p>
+
+            <div style={{ background: 'rgba(0,0,0,0.3)', padding: '14px', borderRadius: '8px', marginBottom: '20px', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '10px', color: '#fff9ef' }}>
+                Import Tracks by Rating:
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '10px' }}>
+                {[5, 4, 3, 2, 1, 0].map((star) => {
+                  const count = structuredImportDialog.scannedFiles.filter((f) => f.rating === star).length
+                  const isChecked = !!structuredImportDialog.selectedRatings[star]
+                  const starLabel = star === 0 ? 'Unrated (0★)' : `${'★'.repeat(star)}${'☆'.repeat(5 - star)}`
+                  return (
+                    <label
+                      key={star}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        padding: '8px 10px',
+                        background: isChecked ? 'rgba(255, 213, 107, 0.12)' : 'rgba(255,255,255,0.04)',
+                        border: isChecked ? '1px solid #ffd56b' : '1px solid rgba(255,255,255,0.08)',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontSize: '0.82rem',
+                        userSelect: 'none',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          const checked = e.target.checked
+                          setStructuredImportDialog((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  selectedRatings: { ...prev.selectedRatings, [star]: checked },
+                                }
+                              : null
+                          )
+                        }}
+                      />
+                      <span style={{ color: star > 0 ? '#ffd56b' : '#a0b2bd', fontWeight: 'bold' }}>{starLabel}</span>
+                      <span style={{ marginLeft: 'auto', opacity: 0.8, fontSize: '0.8rem' }}>({count})</span>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '20px' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: '0.88rem', color: '#a0b2bd' }}>Track Breakdown by Dance:</h4>
+              <div style={{ maxHeight: '180px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '6px', background: 'rgba(0,0,0,0.2)' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ background: 'rgba(255,255,255,0.06)', color: '#ffd56b' }}>
+                      <th style={{ padding: '6px 10px' }}>Dance</th>
+                      <th style={{ padding: '6px 10px' }}>5★</th>
+                      <th style={{ padding: '6px 10px' }}>4★</th>
+                      <th style={{ padding: '6px 10px' }}>3★</th>
+                      <th style={{ padding: '6px 10px' }}>2★</th>
+                      <th style={{ padding: '6px 10px' }}>1★</th>
+                      <th style={{ padding: '6px 10px' }}>0★</th>
+                      <th style={{ padding: '6px 10px' }}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Array.from(new Set(structuredImportDialog.scannedFiles.map((f) => f.danceType))).map((dance) => {
+                      const danceFiles = structuredImportDialog.scannedFiles.filter((f) => f.danceType === dance)
+                      return (
+                        <tr key={dance} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                          <td style={{ padding: '6px 10px', fontWeight: 600, color: '#fff9ef' }}>{dance}</td>
+                          {[5, 4, 3, 2, 1, 0].map((star) => {
+                            const cnt = danceFiles.filter((f) => f.rating === star).length
+                            return (
+                              <td key={star} style={{ padding: '6px 10px', opacity: cnt > 0 ? 1 : 0.4 }}>
+                                {cnt || '-'}
+                              </td>
+                            )
+                          })}
+                          <td style={{ padding: '6px 10px', fontWeight: 'bold', color: '#ffd56b' }}>{danceFiles.length}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                className="edit-modal-close"
+                style={{ padding: '8px 14px', margin: 0 }}
+                onClick={() => setStructuredImportDialog(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="edit-modal-close"
+                style={{ padding: '8px 14px', margin: 0, background: 'rgba(255,255,255,0.08)' }}
+                onClick={() => confirmStructuredImport(true)}
+              >
+                Import All Tracks ({structuredImportDialog.scannedFiles.length})
+              </button>
+              <button
+                type="button"
+                className="edit-modal-close cta"
+                style={{ padding: '8px 18px', margin: 0, fontWeight: 'bold', background: '#ffd56b', color: '#091823' }}
+                onClick={() => confirmStructuredImport(false)}
+              >
+                Import Selected Stars ({
+                  structuredImportDialog.scannedFiles.filter((f) => structuredImportDialog.selectedRatings[f.rating]).length
+                })
               </button>
             </div>
           </div>
