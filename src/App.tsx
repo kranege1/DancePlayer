@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 07:59'
+const BUILD_TIMESTAMP = '2026-08-15 08:05'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -549,13 +549,40 @@ function App() {
     0: false,
   })
 
+  function getNextFinalNumber(category: 'Latin' | 'Standard'): number {
+    const prefix = `${category} Final`
+    const regex = new RegExp(`^${prefix}\\s+(\\d+)`, 'i')
+    let maxNum = 0
+
+    const allNames = [
+      ...savedPlaylists.map((p) => p.name),
+      ...dancePlaylists.map((p) => p.name),
+      playlist.name,
+    ]
+
+    for (const name of allNames) {
+      if (!name) continue
+      const match = name.match(regex)
+      if (match && match[1]) {
+        const num = parseInt(match[1], 10)
+        if (!isNaN(num) && num > maxNum) {
+          maxNum = num
+        }
+      }
+    }
+
+    return maxNum + 1
+  }
+
   function generateCompetitionFinal() {
     const dances: DanceType[] = finalCategory === 'Latin'
       ? ['Samba', 'ChaCha', 'Rumba', 'Paso Doble', 'Jive']
       : ['Waltz', 'Tango', 'Viennese Waltz', 'Foxtrot', 'Quickstep']
 
+    const nextNum = getNextFinalNumber(finalCategory)
     const heatWord = finalHeatsCount === 1 ? 'Heat' : 'Heats'
-    const generatedName = `${finalCategory} Final ${finalHeatsCount} ${heatWord}`
+    const heatsSuffix = finalHeatsCount > 1 ? ` (${finalHeatsCount} ${heatWord})` : ''
+    const generatedName = `${finalCategory} Final ${nextNum}${heatsSuffix}`
 
     const entries: PlaylistEntry[] = []
     const missingDances: string[] = []
