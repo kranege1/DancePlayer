@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 11:48'
+const BUILD_TIMESTAMP = '2026-08-15 11:55'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -819,7 +819,6 @@ function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
     if (window.speechSynthesis.paused) {
       window.speechSynthesis.resume()
     }
-    window.speechSynthesis.cancel()
 
     let word = token
     if (token === '&') word = 'and'
@@ -1500,6 +1499,9 @@ function App() {
   useEffect(() => {
     if (!isPlaying || !currentTrack || !dancerCountInfo || !settings.audioCountMode || settings.audioCountMode === 'muted') {
       lastPlayedRef.current = null
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel()
+      }
       return
     }
 
@@ -1522,6 +1524,12 @@ function App() {
         speakCountToken(token, isBeat1, clickVol)
       } else if (settings.audioCountMode === 'metronome' || settings.audioCountMode === 'drum') {
         playCountSound(settings.audioCountMode, token, isBeat1, clickVol)
+      }
+    }
+
+    return () => {
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel()
       }
     }
   }, [isPlaying, currentTrack, dancerCountInfo, settings.audioCountMode, settings.audioCountVolume, beat1Times])
