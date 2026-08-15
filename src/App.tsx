@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 10:44'
+const BUILD_TIMESTAMP = '2026-08-15 10:52'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -243,6 +243,365 @@ const BEATS_PER_BAR: Record<DanceType, number> = {
   Foxtrot: 4,
   Quickstep: 4,
   Other: 4,
+}
+
+interface CountPattern {
+  name: string
+  label: string
+  pattern: string[]
+  weights: number[]
+  getActiveIndex: (barIndex: number, currentBeatNum: number, beatProgress: number) => number
+}
+
+const DANCE_COUNT_PATTERNS: Record<DanceType, CountPattern[]> = {
+  Samba: [
+    {
+      name: '1 a 2',
+      label: '1 a 2',
+      pattern: ['1', 'a', '2'],
+      weights: [0.75, 0.25, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, beatProgress) => {
+        if (currentBeatNum === 1) {
+          return beatProgress < 0.75 ? 0 : 1
+        }
+        return 2
+      }
+    },
+    {
+      name: '1 2',
+      label: '1 2',
+      pattern: ['1', '2'],
+      weights: [1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    },
+    {
+      name: '1 & 2',
+      label: '1 & 2',
+      pattern: ['1', '&', '2'],
+      weights: [0.5, 0.5, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, beatProgress) => {
+        if (currentBeatNum === 1) {
+          return beatProgress < 0.5 ? 0 : 1
+        }
+        return 2
+      }
+    },
+    {
+      name: '1 2 3 4',
+      label: '1 2 3 4 (2 Bars)',
+      pattern: ['1', '2', '3', '4'],
+      weights: [1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        return barInGroup * 2 + (currentBeatNum - 1)
+      }
+    },
+    {
+      name: '1 2 3 4 5 6 7 8',
+      label: '1-8 (4 Bars)',
+      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
+      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const barInGroup = ((barIndex % 4) + 4) % 4
+        return barInGroup * 2 + (currentBeatNum - 1)
+      }
+    },
+    {
+      name: '1 & 2 3 & 4',
+      label: '1 & 2 3 & 4',
+      pattern: ['1', '&', '2', '3', '&', '4'],
+      weights: [0.5, 0.5, 1.0, 0.5, 0.5, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        if (barInGroup === 0) {
+          if (currentBeatNum === 1) return beatProgress < 0.5 ? 0 : 1
+          return 2
+        } else {
+          if (currentBeatNum === 1) return beatProgress < 0.5 ? 3 : 4
+          return 5
+        }
+      }
+    }
+  ],
+  ChaCha: [
+    {
+      name: '2 3 4 & 1',
+      label: '2 3 4 & 1',
+      pattern: ['2', '3', '4', '&', '1'],
+      weights: [1.0, 1.0, 0.5, 0.5, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, beatProgress) => {
+        if (currentBeatNum === 1) return 4
+        if (currentBeatNum === 2) return 0
+        if (currentBeatNum === 3) return 1
+        return beatProgress < 0.5 ? 2 : 3
+      }
+    },
+    {
+      name: '1 2 3 4',
+      label: '1 2 3 4',
+      pattern: ['1', '2', '3', '4'],
+      weights: [1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    },
+    {
+      name: '1 2 3 4 5 6 7 8',
+      label: '1-8 (2 Bars)',
+      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
+      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        return barInGroup * 4 + (currentBeatNum - 1)
+      }
+    }
+  ],
+  Rumba: [
+    {
+      name: '2 3 4 1',
+      label: '2 3 4 1',
+      pattern: ['2', '3', '4', '1'],
+      weights: [1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => {
+        if (currentBeatNum === 1) return 3
+        return currentBeatNum - 2
+      }
+    },
+    {
+      name: '1 2 3 4',
+      label: '1 2 3 4',
+      pattern: ['1', '2', '3', '4'],
+      weights: [1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    },
+    {
+      name: '1 2 3 4 5 6 7 8',
+      label: '1-8 (2 Bars)',
+      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
+      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        return barInGroup * 4 + (currentBeatNum - 1)
+      }
+    }
+  ],
+  'Paso Doble': [
+    {
+      name: '1 2 3 4 5 6 7 8',
+      label: '1-8 (4 Bars)',
+      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
+      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        return (((barIndex % 4) + 4) % 4) * 2 + (currentBeatNum - 1)
+      }
+    },
+    {
+      name: '1 2',
+      label: '1 2',
+      pattern: ['1', '2'],
+      weights: [1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    },
+    {
+      name: '1 2 3 4',
+      label: '1 2 3 4 (2 Bars)',
+      pattern: ['1', '2', '3', '4'],
+      weights: [1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        return barInGroup * 2 + (currentBeatNum - 1)
+      }
+    }
+  ],
+  Jive: [
+    {
+      name: '1 2 3 4',
+      label: '1 2 3 4',
+      pattern: ['1', '2', '3', '4'],
+      weights: [1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    },
+    {
+      name: '1 2 3 & 4 5 6 7 & 8',
+      label: '1 2 3 & 4 5 6 7 & 8',
+      pattern: ['1', '2', '3', '&', '4', '5', '6', '7', '&', '8'],
+      weights: [1.0, 1.0, 0.75, 0.25, 1.0, 1.0, 1.0, 0.75, 0.25, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        if (barInGroup === 0) {
+          if (currentBeatNum === 1) return 0
+          if (currentBeatNum === 2) return 1
+          if (currentBeatNum === 3) return beatProgress < 0.75 ? 2 : 3
+          return 4
+        } else {
+          if (currentBeatNum === 1) return 5
+          if (currentBeatNum === 2) return 6
+          if (currentBeatNum === 3) return beatProgress < 0.75 ? 7 : 8
+          return 9
+        }
+      }
+    },
+    {
+      name: '1 2 3 4 5 6 7 8',
+      label: '1-8 (2 Bars)',
+      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
+      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        return barInGroup * 4 + (currentBeatNum - 1)
+      }
+    }
+  ],
+  Tango: [
+    {
+      name: '1 2 3 4',
+      label: '1 2 3 4',
+      pattern: ['1', '2', '3', '4'],
+      weights: [1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    },
+    {
+      name: 'S Q Q',
+      label: 'S Q Q',
+      pattern: ['S', 'Q', 'Q'],
+      weights: [2.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => {
+        if (currentBeatNum === 1 || currentBeatNum === 2) return 0
+        if (currentBeatNum === 3) return 1
+        return 2
+      }
+    },
+    {
+      name: '1 2 3 4 5 6 7 8',
+      label: '1-8 (2 Bars)',
+      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
+      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        return barInGroup * 4 + (currentBeatNum - 1)
+      }
+    }
+  ],
+  Foxtrot: [
+    {
+      name: '1 2 3 4',
+      label: '1 2 3 4',
+      pattern: ['1', '2', '3', '4'],
+      weights: [1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    },
+    {
+      name: 'S S Q Q',
+      label: 'S S Q Q (1.5 Bars)',
+      pattern: ['S', 'S', 'Q', 'Q'],
+      weights: [2.0, 2.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const beatIndexInCycle = ((barIndex * 4 + (currentBeatNum - 1)) % 6 + 6) % 6
+        if (beatIndexInCycle < 2) return 0
+        if (beatIndexInCycle < 4) return 1
+        if (beatIndexInCycle === 4) return 2
+        return 3
+      }
+    },
+    {
+      name: 'S Q Q',
+      label: 'S Q Q',
+      pattern: ['S', 'Q', 'Q'],
+      weights: [2.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => {
+        if (currentBeatNum === 1 || currentBeatNum === 2) return 0
+        if (currentBeatNum === 3) return 1
+        return 2
+      }
+    },
+    {
+      name: '1 2 3 4 5 6 7 8',
+      label: '1-8 (2 Bars)',
+      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
+      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        return barInGroup * 4 + (currentBeatNum - 1)
+      }
+    }
+  ],
+  Quickstep: [
+    {
+      name: '1 2 3 4',
+      label: '1 2 3 4',
+      pattern: ['1', '2', '3', '4'],
+      weights: [1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    },
+    {
+      name: 'S S Q Q',
+      label: 'S S Q Q (1.5 Bars)',
+      pattern: ['S', 'S', 'Q', 'Q'],
+      weights: [2.0, 2.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const beatIndexInCycle = ((barIndex * 4 + (currentBeatNum - 1)) % 6 + 6) % 6
+        if (beatIndexInCycle < 2) return 0
+        if (beatIndexInCycle < 4) return 1
+        if (beatIndexInCycle === 4) return 2
+        return 3
+      }
+    },
+    {
+      name: '1 2 3 4 5 6 7 8',
+      label: '1-8 (2 Bars)',
+      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
+      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        return barInGroup * 4 + (currentBeatNum - 1)
+      }
+    }
+  ],
+  Waltz: [
+    {
+      name: '1 2 3',
+      label: '1 2 3',
+      pattern: ['1', '2', '3'],
+      weights: [1.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    },
+    {
+      name: '1 2 3 4 5 6',
+      label: '1-6 (2 Bars)',
+      pattern: ['1', '2', '3', '4', '5', '6'],
+      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        return barInGroup * 3 + (currentBeatNum - 1)
+      }
+    }
+  ],
+  'Viennese Waltz': [
+    {
+      name: '1 2 3',
+      label: '1 2 3',
+      pattern: ['1', '2', '3'],
+      weights: [1.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    },
+    {
+      name: '1 2 3 4 5 6',
+      label: '1-6 (2 Bars)',
+      pattern: ['1', '2', '3', '4', '5', '6'],
+      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        return barInGroup * 3 + (currentBeatNum - 1)
+      }
+    }
+  ],
+  Other: [
+    {
+      name: 'standard',
+      label: 'Standard',
+      pattern: ['1', '2', '3', '4'],
+      weights: [1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    }
+  ]
 }
 
 const DANCE_ABBR: Record<DanceType, string> = {
@@ -972,84 +1331,22 @@ function App() {
     const beatDuration = interval / beatsPerBar
     const beatProgress = (elapsedInBar % beatDuration) / beatDuration
 
-    let pattern: string[] = []
-    let weights: number[] = []
-    let activeIndex = 0
-    let activeLabel = ''
+    const patterns = DANCE_COUNT_PATTERNS[dance] || DANCE_COUNT_PATTERNS['Other']
+    const configuredPatternName = settings.dancerCountPatterns?.[dance]
+    const activePattern = patterns.find(p => p.name === configuredPatternName) || patterns[0]
 
-    if (dance === 'ChaCha') {
-      pattern = ['2', '3', '4', '&', '1']
-      weights = [1.0, 1.0, 0.5, 0.5, 1.0]
-      if (currentBeatNum === 1) {
-        activeIndex = 4
-      } else if (currentBeatNum === 2) {
-        activeIndex = 0
-      } else if (currentBeatNum === 3) {
-        activeIndex = 1
-      } else if (currentBeatNum === 4) {
-        if (beatProgress < 0.5) {
-          activeIndex = 2
-        } else {
-          activeIndex = 3
-        }
-      }
-      activeLabel = pattern[activeIndex]
-    } else if (dance === 'Rumba') {
-      pattern = ['2', '3', '4', '1']
-      weights = [1.0, 1.0, 1.0, 1.0]
-      if (currentBeatNum === 1) {
-        activeIndex = 3
-      } else if (currentBeatNum === 2) {
-        activeIndex = 0
-      } else if (currentBeatNum === 3) {
-        activeIndex = 1
-      } else if (currentBeatNum === 4) {
-        activeIndex = 2
-      }
-      activeLabel = pattern[activeIndex]
-    } else if (dance === 'Samba') {
-      pattern = ['1', 'a', '2']
-      weights = [0.75, 0.25, 1.0]
-      if (currentBeatNum === 1) {
-        if (beatProgress < 0.75) {
-          activeIndex = 0
-        } else {
-          activeIndex = 1
-        }
-      } else if (currentBeatNum === 2) {
-        activeIndex = 2
-      }
-      activeLabel = pattern[activeIndex]
-    } else if (dance === 'Jive') {
-      pattern = ['1', '2', '3', '4']
-      weights = [1.0, 1.0, 1.0, 1.0]
-      activeIndex = currentBeatNum - 1
-      activeLabel = pattern[activeIndex]
-    } else if (dance === 'Waltz' || dance === 'Viennese Waltz') {
-      pattern = ['1', '2', '3']
-      weights = [1.0, 1.0, 1.0]
-      activeIndex = currentBeatNum - 1
-      activeLabel = pattern[activeIndex]
-    } else if (dance === 'Foxtrot' || dance === 'Quickstep') {
-      pattern = ['1', '2', '3', '4']
-      weights = [1.0, 1.0, 1.0, 1.0]
-      activeIndex = currentBeatNum - 1
-      activeLabel = pattern[activeIndex]
-    } else if (dance === 'Paso Doble') {
-      pattern = ['1', '2', '3', '4', '5', '6', '7', '8']
-      weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
-      const pasoBeatIndex = (((barIndex % 4) + 4) % 4) * 2 + (currentBeatNum - 1)
-      activeIndex = pasoBeatIndex
-      activeLabel = pattern[activeIndex]
-    } else {
+    let pattern = activePattern.pattern
+    let weights = activePattern.weights
+    if (dance === 'Other' || activePattern.name === 'standard') {
       pattern = Array.from({ length: beatsPerBar }, (_, i) => String(i + 1))
       weights = Array.from({ length: beatsPerBar }, () => 1.0)
-      activeIndex = currentBeatNum - 1
-      activeLabel = pattern[activeIndex]
     }
 
+    const activeIndex = activePattern.getActiveIndex(barIndex, currentBeatNum, beatProgress)
+    const activeLabel = pattern[activeIndex] || ''
+
     return { pattern, weights, activeIndex, activeLabel }
-  }, [currentTrack, mainCurrentTime, beat1Times, currentBeatNum])
+  }, [currentTrack, mainCurrentTime, beat1Times, currentBeatNum, settings.dancerCountPatterns])
 
   // Media Session API integration
   useEffect(() => {
@@ -3632,8 +3929,47 @@ function App() {
                   height: '38px', // slightly taller to host duration bars
                   boxSizing: 'border-box'
                 }}>
-                  <span style={{ color: '#a0b2bd', marginRight: '8px' }}>Dancer Count:</span>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flex: 1, justifyContent: 'flex-end', maxWidth: '300px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ color: '#a0b2bd' }}>Dancer Count:</span>
+                    {(() => {
+                      const dance = currentTrack.danceType
+                      const patterns = DANCE_COUNT_PATTERNS[dance] || []
+                      if (patterns.length <= 1) return null
+                      const currentVal = settings.dancerCountPatterns?.[dance] || patterns[0].name
+                      return (
+                        <select
+                          value={currentVal}
+                          onChange={(e) => {
+                            const val = e.target.value
+                            setSettings((prev) => ({
+                              ...prev,
+                              dancerCountPatterns: {
+                                ...(prev.dancerCountPatterns || {}),
+                                [dance]: val
+                              }
+                            }))
+                          }}
+                          style={{
+                            background: '#1c3d4e',
+                            color: '#fff9ef',
+                            borderColor: 'rgba(255, 255, 255, 0.2)',
+                            borderRadius: '4px',
+                            padding: '1px 4px',
+                            fontSize: '0.7rem',
+                            cursor: 'pointer',
+                            outline: 'none'
+                          }}
+                        >
+                          {patterns.map((pat) => (
+                            <option key={pat.name} value={pat.name}>
+                              {pat.label}
+                            </option>
+                          ))}
+                        </select>
+                      )
+                    })()}
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flex: 1, justifyContent: 'flex-end', maxWidth: '280px' }}>
                     {dancerCountInfo.pattern.map((tok, idx) => {
                       const isActive = idx === dancerCountInfo.activeIndex;
                       const weight = dancerCountInfo.weights[idx] || 1.0;

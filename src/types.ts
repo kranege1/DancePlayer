@@ -84,6 +84,7 @@ export interface AppSettings {
   playSequence?: 'default' | 'rating' | 'shuffle'
   repeatPlaylist?: boolean
   tapLatencyMs?: number
+  dancerCountPatterns?: Record<string, string>
 }
 
 export const WDSF_2025_DEFAULT_PLAYTIMES: Record<DanceType, number> = {
