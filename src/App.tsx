@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 11:27'
+const BUILD_TIMESTAMP = '2026-08-15 11:33'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -4180,6 +4180,7 @@ function App() {
                             min="0"
                             max="1"
                             step="0.05"
+                            className="volume-balance-slider"
                             value={balance}
                             onChange={(e) => {
                               const val = parseFloat(e.target.value)
@@ -4187,13 +4188,6 @@ function App() {
                                 ...prev,
                                 audioCountVolume: val
                               }))
-                            }}
-                            style={{
-                              width: '75px',
-                              height: '3px',
-                              cursor: 'pointer',
-                              accentColor: '#ff7043',
-                              outline: 'none'
                             }}
                             title={`Music: ${musicPct}% | Clicks: ${clickPct}%`}
                           />
