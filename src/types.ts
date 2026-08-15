@@ -87,6 +87,7 @@ export interface AppSettings {
   dancerCountPatterns?: Record<string, string>
   audioCountMode?: 'muted' | 'voice' | 'metronome' | 'drum'
   audioCountVolume?: number
+  audioCountOffsetMs?: number
 }
 
 export const WDSF_2025_DEFAULT_PLAYTIMES: Record<DanceType, number> = {

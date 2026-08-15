@@ -23,7 +23,7 @@ import { VOICE_ASSETS } from './voiceAssets'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 17:49'
+const BUILD_TIMESTAMP = '2026-08-15 17:56'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -68,6 +68,7 @@ const initialSettings: AppSettings = {
   tapLatencyMs: 100,
   audioCountMode: 'muted',
   audioCountVolume: 0.0,
+  audioCountOffsetMs: 0,
 }
 
 const initialPlaylist: Playlist = {
@@ -3269,7 +3270,9 @@ function App() {
         if (countMode && countMode !== 'muted') {
           const dance = track.danceType
           const patternName = settingsRef.current.dancerCountPatterns?.[dance]
-          const info = getDancerCountInfoAtTime(track, curTime, total, patternName)
+          const offsetSec = (settingsRef.current.audioCountOffsetMs ?? 0) / 1000
+          const adjustedTime = curTime + offsetSec
+          const info = getDancerCountInfoAtTime(track, adjustedTime, total, patternName)
           if (info) {
             if (info.activeIndex !== lastBeatIndexLocal) {
               lastBeatIndexLocal = info.activeIndex
@@ -4392,24 +4395,55 @@ function App() {
                       const musicPct = Math.round((1.0 - 0.5 * balance) * 100)
                       const clickPct = Math.round((0.5 + 0.5 * balance) * 100)
                       return (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '6px' }}>
-                          <span style={{ fontSize: '0.65rem', color: '#8a9aa3' }}>Vol:</span>
-                          <input
-                            type="range"
-                            min="0"
-                            max="1"
-                            step="0.05"
-                            className="volume-balance-slider"
-                            value={balance}
-                            onChange={(e) => {
-                              const val = parseFloat(e.target.value)
-                              setSettings((prev) => ({
-                                ...prev,
-                                audioCountVolume: val
-                              }))
-                            }}
-                            title={`Music: ${musicPct}% | Clicks: ${clickPct}%`}
-                          />
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginLeft: '6px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                            <span style={{ fontSize: '0.65rem', color: '#8a9aa3' }}>Vol:</span>
+                            <input
+                              type="range"
+                              min="0"
+                              max="1"
+                              step="0.05"
+                              className="volume-balance-slider"
+                              value={balance}
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value)
+                                setSettings((prev) => ({
+                                  ...prev,
+                                  audioCountVolume: val
+                                }))
+                              }}
+                              title={`Music: ${musicPct}% | Clicks: ${clickPct}%`}
+                            />
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                            <span style={{ fontSize: '0.65rem', color: '#8a9aa3' }} title="Offset play timing of counts (+50ms plays counts 50ms earlier, -50ms plays counts 50ms later)">Sync:</span>
+                            <input
+                              type="number"
+                              min="-300"
+                              max="300"
+                              step="5"
+                              value={settings.audioCountOffsetMs ?? 0}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value, 10) || 0
+                                setSettings((prev) => ({
+                                  ...prev,
+                                  audioCountOffsetMs: val
+                                }))
+                              }}
+                              style={{
+                                background: '#1c3d4e',
+                                color: '#fff9ef',
+                                border: '1px solid rgba(255, 255, 255, 0.2)',
+                                borderRadius: '4px',
+                                width: '38px',
+                                fontSize: '0.65rem',
+                                padding: '1px 2px',
+                                textAlign: 'center',
+                                outline: 'none'
+                              }}
+                            />
+                            <span style={{ fontSize: '0.6rem', color: '#6f8a99' }}>ms</span>
+                          </div>
                         </div>
                       )
                     })()}
