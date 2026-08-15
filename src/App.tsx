@@ -19,10 +19,11 @@ import { getFadeWindow } from './playbackMath'
 import { lookupTrackOnMusicBrainz } from './musicbrainz'
 import { parseFilenamesWithGrok, type GrokTrackInfo } from './grok'
 import danceShapeUrl from './DanceShape.png'
+import { VOICE_ASSETS } from './voiceAssets'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 17:19'
+const BUILD_TIMESTAMP = '2026-08-15 17:33'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -684,6 +685,36 @@ function formatTime(s: number): string {
 }
 
 let sharedAudioCtx: AudioContext | null = null
+const voiceAudioBuffers: Record<string, AudioBuffer> = {}
+let voiceAssetsLoadingPromise: Promise<void> | null = null
+
+function loadVoiceAssets(audioCtx: AudioContext): Promise<void> {
+  if (voiceAssetsLoadingPromise) {
+    return voiceAssetsLoadingPromise
+  }
+
+  voiceAssetsLoadingPromise = (async () => {
+    const promises = Object.entries(VOICE_ASSETS).map(async ([key, base64Url]) => {
+      try {
+        const base64Data = base64Url.split(',')[1]
+        const binaryString = window.atob(base64Data)
+        const len = binaryString.length
+        const bytes = new Uint8Array(len)
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i)
+        }
+        const buffer = bytes.buffer
+        const audioBuffer = await audioCtx.decodeAudioData(buffer)
+        voiceAudioBuffers[key] = audioBuffer
+      } catch (err) {
+        console.error(`Failed to decode voice asset for ${key}:`, err)
+      }
+    })
+    await Promise.all(promises)
+  })()
+
+  return voiceAssetsLoadingPromise
+}
 
 function getAudioContext(): AudioContext {
   if (!sharedAudioCtx) {
@@ -814,37 +845,32 @@ function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: bool
 
 function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
   try {
-    if (!window.speechSynthesis) return
-    
-    if (window.speechSynthesis.paused) {
-      window.speechSynthesis.resume()
+    const audioCtx = getAudioContext()
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(err => console.error('Failed to resume context:', err))
     }
 
-    let word = token
-    if (token === '&') word = 'and'
-    if (token === 'a') word = 'uh'
-    if (token === 'S') word = 'slow'
-    if (token === 'Q') word = 'quick'
+    void loadVoiceAssets(audioCtx)
 
-    const utterance = new SpeechSynthesisUtterance(word)
-    utterance.lang = 'en-US'
-    
-    // Try to find a standard English voice
-    const voices = window.speechSynthesis.getVoices()
-    const enVoice = voices.find(v => v.lang.startsWith('en'))
-    if (enVoice) {
-      utterance.voice = enVoice
+    const buffer = voiceAudioBuffers[token]
+    if (!buffer) {
+      return
     }
 
-    utterance.rate = 2.0
-    utterance.pitch = isBeat1 || token === '1' || token === 'S' ? 1.3 : 0.95
-    
+    const source = audioCtx.createBufferSource()
+    source.buffer = buffer
+
+    const gain = audioCtx.createGain()
+    source.connect(gain)
+    gain.connect(audioCtx.destination)
+
+    const now = audioCtx.currentTime
     const baseVolume = isBeat1 || token === '1' || token === 'S' ? 1.0 : 0.65
-    utterance.volume = Math.max(0, Math.min(1.0, baseVolume * volume))
+    gain.gain.setValueAtTime(baseVolume * volume, now)
 
-    window.speechSynthesis.speak(utterance)
+    source.start(now)
   } catch (err) {
-    console.error('Failed to speak count token:', err)
+    console.error('Failed to play voice count token:', err)
   }
 }
 
@@ -1661,17 +1687,13 @@ function App() {
     audio.volume = musicVol
   }, [settings.audioCountVolume, isPlaying, beat1Times, settings.audioCountMode])
 
-  // Pre-load speech synthesis voices on mount
+  // Pre-decode high-quality voice audio buffers on mount
   useEffect(() => {
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.getVoices()
-      const handleVoices = () => {
-        window.speechSynthesis.getVoices()
-      }
-      window.speechSynthesis.addEventListener('voiceschanged', handleVoices)
-      return () => {
-        window.speechSynthesis.removeEventListener('voiceschanged', handleVoices)
-      }
+    try {
+      const audioCtx = getAudioContext()
+      void loadVoiceAssets(audioCtx)
+    } catch (err) {
+      console.error('Failed to preload voice assets on mount:', err)
     }
   }, [])
 
