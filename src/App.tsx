@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 10:52'
+const BUILD_TIMESTAMP = '2026-08-15 10:59'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -65,6 +65,7 @@ const initialSettings: AppSettings = {
   playSequence: 'default',
   repeatPlaylist: false,
   tapLatencyMs: 100,
+  audioCountMode: 'muted',
 }
 
 const initialPlaylist: Playlist = {
@@ -714,6 +715,126 @@ function playBeep() {
   }
 }
 
+function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: boolean) {
+  try {
+    const audioCtx = getAudioContext()
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume().catch(err => console.error('Failed to resume context:', err))
+    }
+    const now = audioCtx.currentTime
+
+    if (type === 'metronome') {
+      const osc = audioCtx.createOscillator()
+      const gain = audioCtx.createGain()
+      osc.connect(gain)
+      gain.connect(audioCtx.destination)
+
+      if (isBeat1 || token === '1' || token === 'S') {
+        // High, crisp click
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(1200, now)
+        gain.gain.setValueAtTime(0.4, now)
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08)
+        osc.start(now)
+        osc.stop(now + 0.08)
+      } else if (token === '&' || token === 'a') {
+        // Soft subdivision tick
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(600, now)
+        gain.gain.setValueAtTime(0.15, now)
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04)
+        osc.start(now)
+        osc.stop(now + 0.04)
+      } else {
+        // Standard beat click
+        osc.type = 'sine'
+        osc.frequency.setValueAtTime(800, now)
+        gain.gain.setValueAtTime(0.25, now)
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06)
+        osc.start(now)
+        osc.stop(now + 0.06)
+      }
+    } else if (type === 'drum') {
+      if (isBeat1 || token === '1' || token === 'S') {
+        // Deep bass drum kick
+        const oscKick = audioCtx.createOscillator()
+        const gainKick = audioCtx.createGain()
+        oscKick.connect(gainKick)
+        gainKick.connect(audioCtx.destination)
+        oscKick.type = 'triangle'
+        oscKick.frequency.setValueAtTime(150, now)
+        oscKick.frequency.exponentialRampToValueAtTime(50, now + 0.15)
+        gainKick.gain.setValueAtTime(0.5, now)
+        gainKick.gain.exponentialRampToValueAtTime(0.001, now + 0.15)
+        oscKick.start(now)
+        oscKick.stop(now + 0.15)
+
+        // Snare pop
+        const oscSnare = audioCtx.createOscillator()
+        const gainSnare = audioCtx.createGain()
+        oscSnare.connect(gainSnare)
+        gainSnare.connect(audioCtx.destination)
+        oscSnare.type = 'sine'
+        oscSnare.frequency.setValueAtTime(800, now)
+        gainSnare.gain.setValueAtTime(0.15, now)
+        gainSnare.gain.exponentialRampToValueAtTime(0.001, now + 0.08)
+        oscSnare.start(now)
+        oscSnare.stop(now + 0.08)
+      } else if (token === '&' || token === 'a') {
+        // Closed hi-hat
+        const oscHat = audioCtx.createOscillator()
+        const gainHat = audioCtx.createGain()
+        oscHat.connect(gainHat)
+        gainHat.connect(audioCtx.destination)
+        oscHat.type = 'triangle'
+        oscHat.frequency.setValueAtTime(1000, now)
+        gainHat.gain.setValueAtTime(0.08, now)
+        gainHat.gain.exponentialRampToValueAtTime(0.001, now + 0.03)
+        oscHat.start(now)
+        oscHat.stop(now + 0.03)
+      } else {
+        // Rimshot or wood block
+        const oscBlock = audioCtx.createOscillator()
+        const gainBlock = audioCtx.createGain()
+        oscBlock.connect(gainBlock)
+        gainBlock.connect(audioCtx.destination)
+        oscBlock.type = 'triangle'
+        oscBlock.frequency.setValueAtTime(300, now)
+        gainBlock.gain.setValueAtTime(0.3, now)
+        gainBlock.gain.exponentialRampToValueAtTime(0.001, now + 0.08)
+        oscBlock.start(now)
+        oscBlock.stop(now + 0.08)
+      }
+    }
+  } catch (err) {
+    console.error('Failed to play count sound:', err)
+  }
+}
+
+function speakCountToken(token: string, isBeat1: boolean) {
+  try {
+    if (!window.speechSynthesis) return
+    window.speechSynthesis.cancel()
+
+    let word = token
+    if (token === '&') word = 'and'
+    if (token === 'a') word = 'uh'
+    if (token === 'S') word = 'slow'
+    if (token === 'Q') word = 'quick'
+
+    const utterance = new SpeechSynthesisUtterance(word)
+    utterance.lang = 'en-US'
+    utterance.rate = 1.8
+    utterance.pitch = isBeat1 || token === '1' || token === 'S' ? 1.3 : 0.95
+    utterance.volume = isBeat1 || token === '1' || token === 'S' ? 1.0 : 0.65
+
+    window.speechSynthesis.speak(utterance)
+  } catch (err) {
+    console.error('Failed to speak count token:', err)
+  }
+}
+
+
 
 function App() {
   // Load initial persisted state synchronously from localStorage to avoid setting state in useEffect
@@ -1347,6 +1468,35 @@ function App() {
 
     return { pattern, weights, activeIndex, activeLabel }
   }, [currentTrack, mainCurrentTime, beat1Times, currentBeatNum, settings.dancerCountPatterns])
+
+  const lastPlayedRef = useRef<{ index: number; label: string; trackId: string } | null>(null)
+
+  useEffect(() => {
+    if (!isPlaying || !currentTrack || !dancerCountInfo || !settings.audioCountMode || settings.audioCountMode === 'muted') {
+      lastPlayedRef.current = null
+      return
+    }
+
+    const currentKey = `${dancerCountInfo.activeIndex}-${dancerCountInfo.activeLabel}-${currentTrack.id}`
+    const lastKey = lastPlayedRef.current ? `${lastPlayedRef.current.index}-${lastPlayedRef.current.label}-${lastPlayedRef.current.trackId}` : null
+
+    if (currentKey !== lastKey) {
+      lastPlayedRef.current = {
+        index: dancerCountInfo.activeIndex,
+        label: dancerCountInfo.activeLabel,
+        trackId: currentTrack.id
+      }
+
+      const token = dancerCountInfo.activeLabel
+      const isBeat1 = dancerCountInfo.activeIndex === 0
+
+      if (settings.audioCountMode === 'voice') {
+        speakCountToken(token, isBeat1)
+      } else if (settings.audioCountMode === 'metronome' || settings.audioCountMode === 'drum') {
+        playCountSound(settings.audioCountMode, token, isBeat1)
+      }
+    }
+  }, [isPlaying, currentTrack, dancerCountInfo, settings.audioCountMode])
 
   // Media Session API integration
   useEffect(() => {
@@ -3968,6 +4118,32 @@ function App() {
                         </select>
                       )
                     })()}
+                    <select
+                      value={settings.audioCountMode || 'muted'}
+                      onChange={(e) => {
+                        const val = e.target.value as any
+                        setSettings((prev) => ({
+                          ...prev,
+                          audioCountMode: val
+                        }))
+                      }}
+                      style={{
+                        background: '#1c3d4e',
+                        color: '#fff9ef',
+                        borderColor: 'rgba(255, 255, 255, 0.2)',
+                        borderRadius: '4px',
+                        padding: '1px 4px',
+                        fontSize: '0.7rem',
+                        cursor: 'pointer',
+                        outline: 'none',
+                        marginLeft: '2px'
+                      }}
+                    >
+                      <option value="muted">🔇 Muted</option>
+                      <option value="voice">🗣️ Voice</option>
+                      <option value="metronome">⏱️ Metronome</option>
+                      <option value="drum">🥁 Drum</option>
+                    </select>
                   </div>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flex: 1, justifyContent: 'flex-end', maxWidth: '280px' }}>
                     {dancerCountInfo.pattern.map((tok, idx) => {
