@@ -23,7 +23,7 @@ import { VOICE_ASSETS } from './voiceAssets'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 18:06'
+const BUILD_TIMESTAMP = '2026-08-15 18:17'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -422,6 +422,26 @@ const DANCE_COUNT_PATTERNS: Record<DanceType, CountPattern[]> = {
       pattern: ['1', '2', '3', '4'],
       weights: [1.0, 1.0, 1.0, 1.0],
       getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
+    },
+    {
+      name: '1 2 3 a 4 3 a 4',
+      label: 'WDSF: 1 2 3 a 4 3 a 4',
+      pattern: ['1', '2', '3', 'a', '4', '3', 'a', '4', '1', '2'],
+      weights: [1.0, 1.0, 0.75, 0.25, 1.0, 0.75, 0.25, 1.0, 1.0, 1.0],
+      getActiveIndex: (barIndex, currentBeatNum, beatProgress) => {
+        const barInGroup = ((barIndex % 2) + 2) % 2
+        if (barInGroup === 0) {
+          if (currentBeatNum === 1) return 0
+          if (currentBeatNum === 2) return 1
+          if (currentBeatNum === 3) return beatProgress < 0.75 ? 2 : 3
+          return 4
+        } else {
+          if (currentBeatNum === 1) return beatProgress < 0.75 ? 5 : 6
+          if (currentBeatNum === 2) return 7
+          if (currentBeatNum === 3) return 8
+          return 9
+        }
+      }
     },
     {
       name: '1 2 3 & 4 5 6 7 & 8',
