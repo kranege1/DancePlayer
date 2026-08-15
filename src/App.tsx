@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 10:59'
+const BUILD_TIMESTAMP = '2026-08-15 11:05'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -66,6 +66,7 @@ const initialSettings: AppSettings = {
   repeatPlaylist: false,
   tapLatencyMs: 100,
   audioCountMode: 'muted',
+  audioCountVolume: 1.0,
 }
 
 const initialPlaylist: Playlist = {
@@ -715,7 +716,7 @@ function playBeep() {
   }
 }
 
-function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: boolean) {
+function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: boolean, volume = 1.0) {
   try {
     const audioCtx = getAudioContext()
     if (audioCtx.state === 'suspended') {
@@ -733,7 +734,7 @@ function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: bool
         // High, crisp click
         osc.type = 'sine'
         osc.frequency.setValueAtTime(1200, now)
-        gain.gain.setValueAtTime(0.4, now)
+        gain.gain.setValueAtTime(0.4 * volume, now)
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08)
         osc.start(now)
         osc.stop(now + 0.08)
@@ -741,7 +742,7 @@ function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: bool
         // Soft subdivision tick
         osc.type = 'sine'
         osc.frequency.setValueAtTime(600, now)
-        gain.gain.setValueAtTime(0.15, now)
+        gain.gain.setValueAtTime(0.15 * volume, now)
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.04)
         osc.start(now)
         osc.stop(now + 0.04)
@@ -749,7 +750,7 @@ function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: bool
         // Standard beat click
         osc.type = 'sine'
         osc.frequency.setValueAtTime(800, now)
-        gain.gain.setValueAtTime(0.25, now)
+        gain.gain.setValueAtTime(0.25 * volume, now)
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.06)
         osc.start(now)
         osc.stop(now + 0.06)
@@ -764,7 +765,7 @@ function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: bool
         oscKick.type = 'triangle'
         oscKick.frequency.setValueAtTime(150, now)
         oscKick.frequency.exponentialRampToValueAtTime(50, now + 0.15)
-        gainKick.gain.setValueAtTime(0.5, now)
+        gainKick.gain.setValueAtTime(0.5 * volume, now)
         gainKick.gain.exponentialRampToValueAtTime(0.001, now + 0.15)
         oscKick.start(now)
         oscKick.stop(now + 0.15)
@@ -776,7 +777,7 @@ function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: bool
         gainSnare.connect(audioCtx.destination)
         oscSnare.type = 'sine'
         oscSnare.frequency.setValueAtTime(800, now)
-        gainSnare.gain.setValueAtTime(0.15, now)
+        gainSnare.gain.setValueAtTime(0.15 * volume, now)
         gainSnare.gain.exponentialRampToValueAtTime(0.001, now + 0.08)
         oscSnare.start(now)
         oscSnare.stop(now + 0.08)
@@ -788,7 +789,7 @@ function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: bool
         gainHat.connect(audioCtx.destination)
         oscHat.type = 'triangle'
         oscHat.frequency.setValueAtTime(1000, now)
-        gainHat.gain.setValueAtTime(0.08, now)
+        gainHat.gain.setValueAtTime(0.08 * volume, now)
         gainHat.gain.exponentialRampToValueAtTime(0.001, now + 0.03)
         oscHat.start(now)
         oscHat.stop(now + 0.03)
@@ -800,7 +801,7 @@ function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: bool
         gainBlock.connect(audioCtx.destination)
         oscBlock.type = 'triangle'
         oscBlock.frequency.setValueAtTime(300, now)
-        gainBlock.gain.setValueAtTime(0.3, now)
+        gainBlock.gain.setValueAtTime(0.3 * volume, now)
         gainBlock.gain.exponentialRampToValueAtTime(0.001, now + 0.08)
         oscBlock.start(now)
         oscBlock.stop(now + 0.08)
@@ -811,7 +812,7 @@ function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: bool
   }
 }
 
-function speakCountToken(token: string, isBeat1: boolean) {
+function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
   try {
     if (!window.speechSynthesis) return
     window.speechSynthesis.cancel()
@@ -826,7 +827,9 @@ function speakCountToken(token: string, isBeat1: boolean) {
     utterance.lang = 'en-US'
     utterance.rate = 1.8
     utterance.pitch = isBeat1 || token === '1' || token === 'S' ? 1.3 : 0.95
-    utterance.volume = isBeat1 || token === '1' || token === 'S' ? 1.0 : 0.65
+    
+    const baseVolume = isBeat1 || token === '1' || token === 'S' ? 1.0 : 0.65
+    utterance.volume = Math.max(0, Math.min(1.0, baseVolume * volume))
 
     window.speechSynthesis.speak(utterance)
   } catch (err) {
@@ -1489,14 +1492,15 @@ function App() {
 
       const token = dancerCountInfo.activeLabel
       const isBeat1 = dancerCountInfo.activeIndex === 0
+      const vol = settings.audioCountVolume ?? 1.0
 
       if (settings.audioCountMode === 'voice') {
-        speakCountToken(token, isBeat1)
+        speakCountToken(token, isBeat1, vol)
       } else if (settings.audioCountMode === 'metronome' || settings.audioCountMode === 'drum') {
-        playCountSound(settings.audioCountMode, token, isBeat1)
+        playCountSound(settings.audioCountMode, token, isBeat1, vol)
       }
     }
-  }, [isPlaying, currentTrack, dancerCountInfo, settings.audioCountMode])
+  }, [isPlaying, currentTrack, dancerCountInfo, settings.audioCountMode, settings.audioCountVolume])
 
   // Media Session API integration
   useEffect(() => {
@@ -4144,8 +4148,35 @@ function App() {
                       <option value="metronome">⏱️ Metronome</option>
                       <option value="drum">🥁 Drum</option>
                     </select>
+                    {settings.audioCountMode && settings.audioCountMode !== 'muted' && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '6px' }}>
+                        <span style={{ fontSize: '0.65rem', color: '#8a9aa3' }}>Vol:</span>
+                        <input
+                          type="range"
+                          min="0"
+                          max="2"
+                          step="0.1"
+                          value={settings.audioCountVolume ?? 1.0}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value)
+                            setSettings((prev) => ({
+                              ...prev,
+                              audioCountVolume: val
+                            }))
+                          }}
+                          style={{
+                            width: '40px',
+                            height: '3px',
+                            cursor: 'pointer',
+                            accentColor: '#ff7043',
+                            outline: 'none'
+                          }}
+                          title={`Volume: ${Math.round((settings.audioCountVolume ?? 1.0) * 100)}%`}
+                        />
+                      </div>
+                    )}
                   </div>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flex: 1, justifyContent: 'flex-end', maxWidth: '280px' }}>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flex: 1, justifyContent: 'flex-end', maxWidth: '240px' }}>
                     {dancerCountInfo.pattern.map((tok, idx) => {
                       const isActive = idx === dancerCountInfo.activeIndex;
                       const weight = dancerCountInfo.weights[idx] || 1.0;
