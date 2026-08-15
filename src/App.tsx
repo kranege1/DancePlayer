@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 11:05'
+const BUILD_TIMESTAMP = '2026-08-15 11:08'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -4165,7 +4165,7 @@ function App() {
                             }))
                           }}
                           style={{
-                            width: '40px',
+                            width: '75px',
                             height: '3px',
                             cursor: 'pointer',
                             accentColor: '#ff7043',
@@ -4176,7 +4176,7 @@ function App() {
                       </div>
                     )}
                   </div>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flex: 1, justifyContent: 'flex-end', maxWidth: '240px' }}>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flex: 1, justifyContent: 'flex-end', maxWidth: '200px' }}>
                     {dancerCountInfo.pattern.map((tok, idx) => {
                       const isActive = idx === dancerCountInfo.activeIndex;
                       const weight = dancerCountInfo.weights[idx] || 1.0;
