@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 11:41'
+const BUILD_TIMESTAMP = '2026-08-15 11:48'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -853,8 +853,8 @@ function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
 
 
 
-function getVolumes(balance: number, hasBeats: boolean) {
-  if (!hasBeats) {
+function getVolumes(balance: number, hasBeats: boolean, countMode?: string) {
+  if (!hasBeats || !countMode || countMode === 'muted') {
     return { musicVol: 1.0, clickVol: 0.0 }
   }
   const musicVol = 1.0 - balance
@@ -1516,7 +1516,7 @@ function App() {
       const token = dancerCountInfo.activeLabel
       const isBeat1 = dancerCountInfo.activeIndex === 0
       const balance = settings.audioCountVolume ?? 0.0
-      const { clickVol } = getVolumes(balance, beat1Times.length > 0)
+      const { clickVol } = getVolumes(balance, beat1Times.length > 0, settings.audioCountMode)
 
       if (settings.audioCountMode === 'voice') {
         speakCountToken(token, isBeat1, clickVol)
@@ -1530,9 +1530,9 @@ function App() {
     const audio = audioRef.current
     if (!audio) return
     const balance = settings.audioCountVolume ?? 0.0
-    const { musicVol } = getVolumes(balance, beat1Times.length > 0)
+    const { musicVol } = getVolumes(balance, beat1Times.length > 0, settings.audioCountMode)
     audio.volume = musicVol
-  }, [settings.audioCountVolume, isPlaying, beat1Times])
+  }, [settings.audioCountVolume, isPlaying, beat1Times, settings.audioCountMode])
 
   // Pre-load speech synthesis voices on mount
   useEffect(() => {
@@ -3083,7 +3083,7 @@ function App() {
 
     const balance = settingsRef.current.audioCountVolume ?? 0.0
     const hasBeats = !!((track.tappedBeat1s && track.tappedBeat1s.length > 0) || (track.beatPairs && track.beatPairs.length > 0))
-    const { musicVol } = getVolumes(balance, hasBeats)
+    const { musicVol } = getVolumes(balance, hasBeats, settingsRef.current.audioCountMode)
 
     const objectUrl = URL.createObjectURL(file)
     activeObjectUrlRef.current = objectUrl
