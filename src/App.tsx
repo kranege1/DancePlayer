@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 08:33'
+const BUILD_TIMESTAMP = '2026-08-15 08:37'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -2053,9 +2053,23 @@ function App() {
   }
 
   function loadSavedPlaylist(p: Playlist) {
-    setPlaylist({ ...p, entries: p.entries.map((e) => ({ ...e })) })
-    setActiveEntryId(null)
-    setStatus(`Loaded playlist "${p.name}".`)
+    clearPlaybackTimers()
+    const audio = audioRef.current
+    if (audio) {
+      audio.pause()
+      audio.src = ''
+      audio.currentTime = 0
+    }
+    setIsPlaying(false)
+    setTrackProgress(0)
+    setMainCurrentTime(0)
+    setMainDuration(0)
+
+    const cloned = { ...p, entries: p.entries.map((e) => ({ ...e })) }
+    setPlaylist(cloned)
+    const firstEntry = cloned.entries[0]
+    setActiveEntryId(firstEntry ? firstEntry.id : null)
+    setStatus(`Loaded playlist "${p.name}". Click Play to start.`)
   }
 
   function deleteSavedPlaylist(id: string) {
