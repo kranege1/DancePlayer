@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 07:30'
+const BUILD_TIMESTAMP = '2026-08-15 07:36'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -1746,19 +1746,22 @@ function App() {
           }
         })
       ).then(() => {
-        setStatus(`Staged library ratings updated from selected files.`)
+        if (!newFiles.length) {
+          setStatus(`ℹ️ All ${duplicateFiles.length} file(s) are already in your library! Updated ratings for existing tracks.`)
+        }
       })
     }
 
     if (!newFiles.length) {
       event.target.value = ''
+      setStatus(`ℹ️ All ${accepted.length} file(s) are already in your library! Ratings were updated for existing tracks.`)
       return
     }
 
     const detectedFilesWithDance = newFiles.map(({ file, hash }) => ({
       file,
       hash,
-      detectedDance: detectDanceFromRelativePath(file.webkitRelativePath),
+      detectedDance: detectDanceFromRelativePath(file.webkitRelativePath) ?? detectDanceFromRelativePath(file.name),
     }))
 
     const latinMatches = LATIN_DANCE_LIST.filter((dance) =>
@@ -1773,20 +1776,18 @@ function App() {
 
     const hasAllLatin = latinMatches.length === 5
     const hasAllStandard = standardMatches.length === 5
-    const isPartialLatin = latinMatches.length >= 3 && latinMatches.length < 5
-    const isPartialStandard = standardMatches.length >= 3 && standardMatches.length < 5
 
-    if (hasAllLatin || hasAllStandard || isPartialLatin || isPartialStandard) {
-      const folderFiles: Array<{ file: File; hash?: string; detectedDance: DanceType }> = []
-      const nonFolderFiles: Array<{ file: File; hash?: string }> = []
-      for (const item of detectedFilesWithDance) {
-        if (item.detectedDance !== null) {
-          folderFiles.push({ file: item.file, hash: item.hash, detectedDance: item.detectedDance })
-        } else {
-          nonFolderFiles.push({ file: item.file, hash: item.hash })
-        }
+    const folderFiles: Array<{ file: File; hash?: string; detectedDance: DanceType }> = []
+    const nonFolderFiles: Array<{ file: File; hash?: string }> = []
+    for (const item of detectedFilesWithDance) {
+      if (item.detectedDance !== null) {
+        folderFiles.push({ file: item.file, hash: item.hash, detectedDance: item.detectedDance })
+      } else {
+        nonFolderFiles.push({ file: item.file, hash: item.hash })
       }
+    }
 
+    if (folderFiles.length > 0) {
       setStatus(`📂 Scanning star ratings for ${folderFiles.length} tracks in detected dance folders…`)
       setImportProgress({ done: 0, total: folderFiles.length })
 
@@ -1808,8 +1809,8 @@ function App() {
       setStructuredImportDialog({
         hasAllLatin,
         hasAllStandard,
-        missingLatin: (hasAllLatin || isPartialLatin) ? missingLatin : [],
-        missingStandard: (hasAllStandard || isPartialStandard) ? missingStandard : [],
+        missingLatin: (latinMatches.length > 0 && latinMatches.length < 5) ? missingLatin : [],
+        missingStandard: (standardMatches.length > 0 && standardMatches.length < 5) ? missingStandard : [],
         scannedFiles,
         nonFolderFiles,
         selectedRatings: { 5: true, 4: true, 3: false, 2: false, 1: false, 0: false },
@@ -1819,7 +1820,7 @@ function App() {
     }
 
     const itemsToImport = newFiles.map(({ file, hash }) => {
-      const pathDance = detectDanceFromRelativePath(file.webkitRelativePath)
+      const pathDance = detectDanceFromRelativePath(file.webkitRelativePath) ?? detectDanceFromRelativePath(file.name)
       return {
         file,
         hash,
