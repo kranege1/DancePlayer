@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 08:07'
+const BUILD_TIMESTAMP = '2026-08-15 08:33'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -2790,7 +2790,6 @@ function App() {
       <header className="hero" style={{ display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
         <img src={danceShapeUrl} alt="Dance Shape" style={{ height: '75px', width: 'auto', borderRadius: '12px', filter: 'drop-shadow(0 4px 6px rgba(0,0,0,0.3))' }} />
         <div style={{ flex: 1, minWidth: '200px' }}>
-          <p className="kicker">DancePlayer PWA</p>
           <h1 style={{ margin: '4px 0 2px' }}>Dance Player</h1>
           <div style={{ margin: '3px 0 6px' }}>
             <span style={{ fontSize: '0.72rem', color: '#ffd56b', background: 'rgba(255, 213, 107, 0.18)', border: '1px solid rgba(255, 213, 107, 0.4)', padding: '2px 8px', borderRadius: '12px', fontWeight: 600, letterSpacing: '0.5px', display: 'inline-block' }}>
