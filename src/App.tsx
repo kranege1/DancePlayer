@@ -23,7 +23,7 @@ import { VOICE_ASSETS } from './voiceAssets'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 17:56'
+const BUILD_TIMESTAMP = '2026-08-15 18:06'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -870,7 +870,7 @@ function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
 
     const source = audioCtx.createBufferSource()
     source.buffer = buffer
-    source.playbackRate.value = 1.35
+    source.playbackRate.value = 1.0
 
     const gain = audioCtx.createGain()
     source.connect(gain)
