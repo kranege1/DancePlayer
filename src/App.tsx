@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 08:05'
+const BUILD_TIMESTAMP = '2026-08-15 08:07'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -540,6 +540,7 @@ function App() {
   // Auto-Create Competition Final state
   const [finalCategory, setFinalCategory] = useState<'Latin' | 'Standard'>('Latin')
   const [finalHeatsCount, setFinalHeatsCount] = useState<number>(1)
+  const [sameSongPerHeat, setSameSongPerHeat] = useState<boolean>(false)
   const [finalSelectedRatings, setFinalSelectedRatings] = useState<Record<number, boolean>>({
     5: true,
     4: true,
@@ -599,9 +600,10 @@ function App() {
       }
 
       const shuffled = [...candidates].sort(() => Math.random() - 0.5)
+      const singleTrackForDance = shuffled[0]
 
       for (let h = 0; h < finalHeatsCount; h++) {
-        const selectedTrack = shuffled[h % shuffled.length]
+        const selectedTrack = sameSongPerHeat ? singleTrackForDance : shuffled[h % shuffled.length]
         entries.push({
           id: createId('entry'),
           type: 'track',
@@ -3184,6 +3186,34 @@ function App() {
                     +
                   </button>
                 </div>
+
+                {/* Same song per heat option */}
+                {finalHeatsCount > 1 && (
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      fontSize: '0.82rem',
+                      color: sameSongPerHeat ? '#ffd56b' : '#a0b2bd',
+                      cursor: 'pointer',
+                      userSelect: 'none',
+                      background: sameSongPerHeat ? 'rgba(255,213,107,0.15)' : 'rgba(0,0,0,0.25)',
+                      padding: '5px 10px',
+                      borderRadius: '8px',
+                      border: sameSongPerHeat ? '1px solid #ffd56b' : '1px solid rgba(255,255,255,0.1)',
+                      transition: 'all 0.1s ease-in-out',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={sameSongPerHeat}
+                      onChange={(e) => setSameSongPerHeat(e.target.checked)}
+                      style={{ margin: 0, cursor: 'pointer' }}
+                    />
+                    <span>Same song for all heats</span>
+                  </label>
+                )}
               </div>
 
               {/* Rating Filter Checkboxes */}
