@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 11:58'
+const BUILD_TIMESTAMP = '2026-08-15 17:19'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -852,6 +852,156 @@ function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
 
 
 
+function getDancerCountInfoAtTime(
+  track: Track,
+  cur: number,
+  dur: number,
+  configuredPatternName?: string
+) {
+  let anchors: number[] = []
+  if (track.tappedBeat1s && track.tappedBeat1s.length > 0) {
+    anchors = [...track.tappedBeat1s].sort((a, b) => a - b)
+  } else if (track.beatPairs && track.beatPairs.length > 0) {
+    const sortedPairs = [...track.beatPairs].sort((a, b) => a.t1 - b.t1)
+    const firstPair = sortedPairs[0]
+    anchors = [firstPair.t1, firstPair.t2]
+    if (track.lateBeatSec !== undefined) {
+      anchors.push(track.lateBeatSec)
+    }
+    anchors.sort((a, b) => a - b)
+  }
+
+  if (anchors.length === 0) {
+    return null
+  }
+
+  let beat1TimesList: number[] = []
+  if (anchors.length < 2) {
+    beat1TimesList = anchors
+  } else {
+    const fineTuneOffset = track.intervalOffsetSec || 0
+    const I_ref = Math.max(0.1, (anchors[1] - anchors[0]) + fineTuneOffset)
+    const list: number[] = []
+    list.push(anchors[0])
+
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const tStart = anchors[i]
+      const tEnd = anchors[i + 1]
+      const diff = tEnd - tStart
+      const numBars = Math.max(1, Math.round(diff / I_ref))
+      const I_local = diff / numBars
+
+      for (let j = 1; j < numBars; j++) {
+        list.push(tStart + j * I_local)
+      }
+      list.push(tEnd)
+    }
+
+    const diffFirst = anchors[1] - anchors[0]
+    const numBarsFirst = Math.max(1, Math.round(diffFirst / I_ref))
+    const I_start = diffFirst / numBarsFirst
+
+    let tPrev = anchors[0] - I_start
+    while (tPrev >= 0) {
+      list.unshift(tPrev)
+      tPrev -= I_start
+    }
+
+    const k = anchors.length - 2
+    const diffLast = anchors[k + 1] - anchors[k]
+    const numBarsLast = Math.max(1, Math.round(diffLast / I_ref))
+    const I_end = diffLast / numBarsLast
+
+    let tNext = anchors[anchors.length - 1] + I_end
+    while (tNext < dur) {
+      list.push(tNext)
+      tNext += I_end
+    }
+
+    beat1TimesList = Array.from(new Set(list)).sort((a, b) => a - b)
+  }
+
+  if (beat1TimesList.length === 0) {
+    return null
+  }
+
+  const dance = track.danceType
+  const beatsPerBar = BEATS_PER_BAR[dance] || 4
+
+  let barStart = beat1TimesList[0]
+  let barEnd = beat1TimesList[1] ?? (barStart + 2.0)
+
+  if (cur < beat1TimesList[0]) {
+    const interval = (beat1TimesList[1] ?? (beat1TimesList[0] + 2.0)) - beat1TimesList[0]
+    const elapsed = beat1TimesList[0] - cur
+    const barsBefore = Math.ceil(elapsed / interval)
+    barStart = beat1TimesList[0] - barsBefore * interval
+    barEnd = barStart + interval
+  } else {
+    let found = false
+    for (let i = 0; i < beat1TimesList.length - 1; i++) {
+      if (cur >= beat1TimesList[i] && cur < beat1TimesList[i + 1]) {
+        barStart = beat1TimesList[i]
+        barEnd = beat1TimesList[i + 1]
+        found = true
+        break
+      }
+    }
+    if (!found) {
+      const lastIdx = beat1TimesList.length - 1
+      const interval = beat1TimesList[lastIdx] - (beat1TimesList[lastIdx - 1] ?? (beat1TimesList[lastIdx] - 2.0))
+      const elapsed = cur - beat1TimesList[lastIdx]
+      const barsAfter = Math.floor(elapsed / interval)
+      barStart = beat1TimesList[lastIdx] + barsAfter * interval
+      barEnd = barStart + interval
+    }
+  }
+
+  const interval = barEnd - barStart
+  const elapsedInBar = cur - barStart
+  const beatDuration = interval / beatsPerBar
+  let currentBeatNum = Math.floor(elapsedInBar / beatDuration) + 1
+  if (currentBeatNum > beatsPerBar) currentBeatNum = beatsPerBar
+  if (currentBeatNum < 1) currentBeatNum = 1
+
+  let barIndex = 0
+  if (cur < beat1TimesList[0]) {
+    const elapsed = beat1TimesList[0] - cur
+    const barsBefore = Math.ceil(elapsed / interval)
+    barIndex = -barsBefore
+  } else {
+    let found = false
+    for (let i = 0; i < beat1TimesList.length - 1; i++) {
+      if (cur >= beat1TimesList[i] && cur < beat1TimesList[i + 1]) {
+        barIndex = i
+        found = true
+        break
+      }
+    }
+    if (!found) {
+      const lastIdx = beat1TimesList.length - 1
+      const elapsed = cur - beat1TimesList[lastIdx]
+      const barsAfter = Math.floor(elapsed / interval)
+      barIndex = lastIdx + barsAfter
+    }
+  }
+
+  const beatProgress = (elapsedInBar % beatDuration) / beatDuration
+
+  const patterns = DANCE_COUNT_PATTERNS[dance] || DANCE_COUNT_PATTERNS['Other']
+  const activePattern = patterns.find(p => p.name === configuredPatternName) || patterns[0]
+
+  let pattern = activePattern.pattern
+  if (dance === 'Other' || activePattern.name === 'standard') {
+    pattern = Array.from({ length: beatsPerBar }, (_, i) => String(i + 1))
+  }
+
+  const activeIndex = activePattern.getActiveIndex(barIndex, currentBeatNum, beatProgress)
+  const activeLabel = pattern[activeIndex] || ''
+
+  return { activeIndex, activeLabel }
+}
+
 function getVolumes(balance: number, hasBeats: boolean, countMode?: string) {
   if (!hasBeats || !countMode || countMode === 'muted') {
     return { musicVol: 1.0, clickVol: 0.0 }
@@ -1494,39 +1644,14 @@ function App() {
     return { pattern, weights, activeIndex, activeLabel }
   }, [currentTrack, mainCurrentTime, beat1Times, currentBeatNum, settings.dancerCountPatterns])
 
-  const lastPlayedRef = useRef<{ index: number; label: string; trackId: string } | null>(null)
 
   useEffect(() => {
-    if (!isPlaying || !currentTrack || !dancerCountInfo || !settings.audioCountMode || settings.audioCountMode === 'muted') {
-      lastPlayedRef.current = null
+    if (!isPlaying) {
       if (typeof window !== 'undefined' && window.speechSynthesis) {
         window.speechSynthesis.cancel()
       }
-      return
     }
-
-    const currentKey = `${dancerCountInfo.activeIndex}-${dancerCountInfo.activeLabel}-${currentTrack.id}`
-    const lastKey = lastPlayedRef.current ? `${lastPlayedRef.current.index}-${lastPlayedRef.current.label}-${lastPlayedRef.current.trackId}` : null
-
-    if (currentKey !== lastKey) {
-      lastPlayedRef.current = {
-        index: dancerCountInfo.activeIndex,
-        label: dancerCountInfo.activeLabel,
-        trackId: currentTrack.id
-      }
-
-      const token = dancerCountInfo.activeLabel
-      const isBeat1 = dancerCountInfo.activeIndex === 0
-      const balance = settings.audioCountVolume ?? 0.0
-      const { clickVol } = getVolumes(balance, beat1Times.length > 0, settings.audioCountMode)
-
-      if (settings.audioCountMode === 'voice') {
-        speakCountToken(token, isBeat1, clickVol)
-      } else if (settings.audioCountMode === 'metronome' || settings.audioCountMode === 'drum') {
-        playCountSound(settings.audioCountMode, token, isBeat1, clickVol)
-      }
-    }
-  }, [isPlaying, currentTrack, dancerCountInfo, settings.audioCountMode, settings.audioCountVolume, beat1Times])
+  }, [isPlaying])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -3097,11 +3222,39 @@ function App() {
       const startSec = Math.max(0, track.cueStartSec)
       audio.currentTime = startSec
 
-      // ── Track progress RAF ──────────────────────────────────────────
+      // ── Track progress RAF (zero-latency count audio scheduling) ──
+      let lastBeatIndexLocal = -1
       const progressTick = () => {
         if (!audio || audio.paused || audio.ended) return
         const total = audio.duration || track.durationSec || 1
-        setTrackProgress(Math.min(1, (audio.currentTime - startSec) / (total - startSec)))
+        const curTime = audio.currentTime
+        setTrackProgress(Math.min(1, (curTime - startSec) / (total - startSec)))
+        setMainCurrentTime(curTime)
+
+        const countMode = settingsRef.current.audioCountMode
+        if (countMode && countMode !== 'muted') {
+          const dance = track.danceType
+          const patternName = settingsRef.current.dancerCountPatterns?.[dance]
+          const info = getDancerCountInfoAtTime(track, curTime, total, patternName)
+          if (info) {
+            if (info.activeIndex !== lastBeatIndexLocal) {
+              lastBeatIndexLocal = info.activeIndex
+              const token = info.activeLabel
+              const isBeat1 = info.activeIndex === 0
+
+              const balance = settingsRef.current.audioCountVolume ?? 0.0
+              const hasBeats = !!((track.tappedBeat1s && track.tappedBeat1s.length > 0) || (track.beatPairs && track.beatPairs.length > 0))
+              const { clickVol } = getVolumes(balance, hasBeats, countMode)
+
+              if (countMode === 'voice') {
+                speakCountToken(token, isBeat1, clickVol)
+              } else if (countMode === 'metronome' || countMode === 'drum') {
+                playCountSound(countMode, token, isBeat1, clickVol)
+              }
+            }
+          }
+        }
+
         trackProgressRef.current = requestAnimationFrame(progressTick)
       }
       trackProgressRef.current = requestAnimationFrame(progressTick)
