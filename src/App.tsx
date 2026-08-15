@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 11:33'
+const BUILD_TIMESTAMP = '2026-08-15 11:37'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -815,6 +815,10 @@ function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: bool
 function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
   try {
     if (!window.speechSynthesis) return
+    
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume()
+    }
     window.speechSynthesis.cancel()
 
     let word = token
@@ -825,7 +829,15 @@ function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
 
     const utterance = new SpeechSynthesisUtterance(word)
     utterance.lang = 'en-US'
-    utterance.rate = 1.8
+    
+    // Try to find a standard English voice
+    const voices = window.speechSynthesis.getVoices()
+    const enVoice = voices.find(v => v.lang.startsWith('en'))
+    if (enVoice) {
+      utterance.voice = enVoice
+    }
+
+    utterance.rate = 2.0
     utterance.pitch = isBeat1 || token === '1' || token === 'S' ? 1.3 : 0.95
     
     const baseVolume = isBeat1 || token === '1' || token === 'S' ? 1.0 : 0.65
@@ -842,8 +854,8 @@ function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
 
 
 function getVolumes(balance: number) {
-  const musicVol = 1.0 - 0.5 * balance
-  const clickVol = 0.5 + 0.5 * balance
+  const musicVol = 1.0 - balance
+  const clickVol = 0.2 + 1.8 * balance
   return { musicVol, clickVol }
 }
 
@@ -1518,6 +1530,20 @@ function App() {
     const { musicVol } = getVolumes(balance)
     audio.volume = musicVol
   }, [settings.audioCountVolume, isPlaying])
+
+  // Pre-load speech synthesis voices on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.getVoices()
+      const handleVoices = () => {
+        window.speechSynthesis.getVoices()
+      }
+      window.speechSynthesis.addEventListener('voiceschanged', handleVoices)
+      return () => {
+        window.speechSynthesis.removeEventListener('voiceschanged', handleVoices)
+      }
+    }
+  }, [])
 
   // Media Session API integration
   useEffect(() => {
