@@ -23,7 +23,7 @@ import { VOICE_ASSETS } from './voiceAssets'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 17:33'
+const BUILD_TIMESTAMP = '2026-08-15 17:49'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -843,6 +843,16 @@ function playCountSound(type: 'metronome' | 'drum', token: string, isBeat1: bool
   }
 }
 
+function getAudioBufferStartOffset(buffer: AudioBuffer, threshold = 0.005): number {
+  const channelData = buffer.getChannelData(0)
+  for (let i = 0; i < channelData.length; i++) {
+    if (Math.abs(channelData[i]) > threshold) {
+      return i / buffer.sampleRate
+    }
+  }
+  return 0
+}
+
 function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
   try {
     const audioCtx = getAudioContext()
@@ -859,6 +869,7 @@ function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
 
     const source = audioCtx.createBufferSource()
     source.buffer = buffer
+    source.playbackRate.value = 1.35
 
     const gain = audioCtx.createGain()
     source.connect(gain)
@@ -868,7 +879,8 @@ function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
     const baseVolume = isBeat1 || token === '1' || token === 'S' ? 1.0 : 0.65
     gain.gain.setValueAtTime(baseVolume * volume, now)
 
-    source.start(now)
+    const startOffset = getAudioBufferStartOffset(buffer)
+    source.start(now, startOffset)
   } catch (err) {
     console.error('Failed to play voice count token:', err)
   }
@@ -4402,7 +4414,7 @@ function App() {
                       )
                     })()}
                   </div>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flex: 1, justifyContent: 'flex-end', maxWidth: '200px' }}>
+                  <div style={{ display: 'flex', gap: '3px', alignItems: 'center', flex: 1, justifyContent: 'flex-end', maxWidth: '280px' }}>
                     {dancerCountInfo.pattern.map((tok, idx) => {
                       const isActive = idx === dancerCountInfo.activeIndex;
                       const weight = dancerCountInfo.weights[idx] || 1.0;
@@ -4422,16 +4434,16 @@ function App() {
                             style={{
                               fontWeight: 'bold',
                               color: isActive ? '#ff7043' : '#6f8a99',
-                              fontSize: '0.9rem',
+                              fontSize: '0.85rem',
                               textShadow: isActive ? '0 0 6px rgba(255, 112, 67, 0.4)' : 'none',
                               transition: 'all 0.08s ease',
-                              padding: '2px 4px',
+                              padding: '2px 2px',
                               borderBottom: '2px solid ' + (isActive ? '#ff7043' : 'transparent'),
                               boxSizing: 'border-box',
                               display: 'inline-block',
                               textAlign: 'center',
                               width: '100%',
-                              minWidth: '16px'
+                              minWidth: '14px'
                             }}
                           >
                             {tok}
