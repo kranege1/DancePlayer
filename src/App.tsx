@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 08:37'
+const BUILD_TIMESTAMP = '2026-08-15 10:44'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -4000,10 +4000,10 @@ function App() {
                           fontSize: '0.75rem'
                         }}
                       >
-                        {(!currentTrack.beatPairs || currentTrack.beatPairs.length === 0) ? (
+                        {(!currentTrack.tappedBeat1s || currentTrack.tappedBeat1s.length < 2) ? (
                           `🥁 Tap Beat 1 (${tapTimes.length}/2)`
                         ) : (
-                          '🎯 Align Late Beat 1'
+                          `🎯 Add Beat 1 Anchor (${currentTrack.tappedBeat1s.length})`
                         )}
                       </button>
 
