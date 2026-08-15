@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 07:48'
+const BUILD_TIMESTAMP = '2026-08-15 07:59'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -536,6 +536,73 @@ function App() {
   const [dancePlaylists, setDancePlaylists] = useState<Playlist[]>(() => persistedState.dancePlaylists ?? [])
   const [savedPlaylists, setSavedPlaylists] = useState<Playlist[]>(() => persistedState.savedPlaylists ?? [])
   const [activeTab, setActiveTab] = useState<'songs' | 'playlists' | 'player' | 'export'>('player')
+
+  // Auto-Create Competition Final state
+  const [finalCategory, setFinalCategory] = useState<'Latin' | 'Standard'>('Latin')
+  const [finalHeatsCount, setFinalHeatsCount] = useState<number>(1)
+  const [finalSelectedRatings, setFinalSelectedRatings] = useState<Record<number, boolean>>({
+    5: true,
+    4: true,
+    3: false,
+    2: false,
+    1: false,
+    0: false,
+  })
+
+  function generateCompetitionFinal() {
+    const dances: DanceType[] = finalCategory === 'Latin'
+      ? ['Samba', 'ChaCha', 'Rumba', 'Paso Doble', 'Jive']
+      : ['Waltz', 'Tango', 'Viennese Waltz', 'Foxtrot', 'Quickstep']
+
+    const heatWord = finalHeatsCount === 1 ? 'Heat' : 'Heats'
+    const generatedName = `${finalCategory} Final ${finalHeatsCount} ${heatWord}`
+
+    const entries: PlaylistEntry[] = []
+    const missingDances: string[] = []
+
+    for (const dance of dances) {
+      let candidates = tracks.filter((t) => t.danceType === dance && !!finalSelectedRatings[t.qualityRating ?? 0])
+      if (candidates.length === 0) {
+        candidates = tracks.filter((t) => t.danceType === dance)
+      }
+
+      if (candidates.length === 0) {
+        missingDances.push(dance)
+        continue
+      }
+
+      const shuffled = [...candidates].sort(() => Math.random() - 0.5)
+
+      for (let h = 0; h < finalHeatsCount; h++) {
+        const selectedTrack = shuffled[h % shuffled.length]
+        entries.push({
+          id: createId('entry'),
+          type: 'track',
+          trackId: selectedTrack.id,
+        })
+      }
+    }
+
+    if (entries.length === 0) {
+      setStatus(`No matching tracks found to create ${generatedName}. Import tracks first.`)
+      return
+    }
+
+    const newPlaylist: Playlist = {
+      id: createId('playlist'),
+      name: generatedName,
+      entries,
+    }
+
+    setSavedPlaylists((prev) => [newPlaylist, ...prev])
+    loadSavedPlaylist(newPlaylist)
+
+    if (missingDances.length > 0) {
+      setStatus(`Created "${generatedName}" (${entries.length} tracks). Missing library tracks for: ${missingDances.join(', ')}.`)
+    } else {
+      setStatus(`🏆 Created and loaded "${generatedName}" (${entries.length} tracks for ${finalHeatsCount} ${heatWord})!`)
+    }
+  }
   const [editingTrackId, setEditingTrackId] = useState<string | null>(null)
   const [zoomBarsCount] = useState(3)
   const zoomCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -3023,6 +3090,124 @@ function App() {
         {/* ── Playlists ── */}
         {activeTab === 'playlists' && (
           <section className="panel">
+            {/* ── Auto-Create Competition Final Card ── */}
+            <div style={{ background: 'linear-gradient(135deg, rgba(255,213,107,0.12) 0%, rgba(13,34,46,0.8) 100%)', border: '1px solid rgba(255,213,107,0.3)', borderRadius: '12px', padding: '16px', marginBottom: '20px' }}>
+              <h3 style={{ margin: '0 0 8px', fontSize: '1.05rem', color: '#ffd56b', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                🏆 Auto-Create Final Playlist
+              </h3>
+              <p style={{ fontSize: '0.85rem', color: '#a0b2bd', margin: '0 0 14px', lineHeight: 1.4 }}>
+                Automatically generate a 5-dance WDSF competition final playlist with heats for Latin or Standard.
+              </p>
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', alignItems: 'center', marginBottom: '14px' }}>
+                {/* Category buttons */}
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button
+                    type="button"
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '20px',
+                      fontWeight: 600,
+                      fontSize: '0.85rem',
+                      border: finalCategory === 'Latin' ? '1px solid #ffd56b' : '1px solid rgba(255,255,255,0.1)',
+                      background: finalCategory === 'Latin' ? '#ffd56b' : 'rgba(255,255,255,0.05)',
+                      color: finalCategory === 'Latin' ? '#091823' : '#fff9ef',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => setFinalCategory('Latin')}
+                  >
+                    💃 Latin (5 Dances)
+                  </button>
+                  <button
+                    type="button"
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '20px',
+                      fontWeight: 600,
+                      fontSize: '0.85rem',
+                      border: finalCategory === 'Standard' ? '1px solid #4ade80' : '1px solid rgba(255,255,255,0.1)',
+                      background: finalCategory === 'Standard' ? '#4ade80' : 'rgba(255,255,255,0.05)',
+                      color: finalCategory === 'Standard' ? '#091823' : '#fff9ef',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => setFinalCategory('Standard')}
+                  >
+                    🕺 Standard (5 Dances)
+                  </button>
+                </div>
+
+                {/* Heats stepper */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.25)', padding: '4px 10px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  <span style={{ fontSize: '0.85rem', color: '#a0b2bd' }}>Heats:</span>
+                  <button
+                    type="button"
+                    style={{ padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.1)', color: '#fff', cursor: 'pointer' }}
+                    onClick={() => setFinalHeatsCount((prev) => Math.max(1, prev - 1))}
+                  >
+                    -
+                  </button>
+                  <span style={{ fontWeight: 'bold', color: '#ffd56b', minWidth: '18px', textAlign: 'center', fontSize: '0.9rem' }}>
+                    {finalHeatsCount}
+                  </span>
+                  <button
+                    type="button"
+                    style={{ padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.1)', color: '#fff', cursor: 'pointer' }}
+                    onClick={() => setFinalHeatsCount((prev) => Math.min(6, prev + 1))}
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+
+              {/* Rating Filter Checkboxes */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '16px' }}>
+                <span style={{ fontSize: '0.82rem', color: '#a0b2bd' }}>Rating Filter:</span>
+                {[5, 4, 3, 2, 1, 0].map((star) => {
+                  const isChecked = !!finalSelectedRatings[star]
+                  const label = star === 0 ? '0★' : `${star}★`
+                  return (
+                    <label
+                      key={star}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '0.8rem',
+                        cursor: 'pointer',
+                        userSelect: 'none',
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        background: isChecked ? 'rgba(255,213,107,0.15)' : 'rgba(255,255,255,0.04)',
+                        border: isChecked ? '1px solid #ffd56b' : '1px solid rgba(255,255,255,0.08)',
+                        color: star > 0 ? '#ffd56b' : '#a0b2bd',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          const checked = e.target.checked
+                          setFinalSelectedRatings((prev) => ({ ...prev, [star]: checked }))
+                        }}
+                        style={{ margin: 0 }}
+                      />
+                      <span>{label}</span>
+                    </label>
+                  )
+                })}
+              </div>
+
+              {/* Action Button */}
+              <button
+                type="button"
+                className="cta"
+                style={{ fontWeight: 'bold', padding: '8px 16px', background: '#ffd56b', color: '#091823' }}
+                onClick={generateCompetitionFinal}
+              >
+                ⚡ Create {finalCategory} Final {finalHeatsCount} {finalHeatsCount === 1 ? 'Heat' : 'Heats'}
+              </button>
+            </div>
+
             {/* ── Topbar: name + Save + New ── */}
             <div className="playlist-topbar">
               <input
