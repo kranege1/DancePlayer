@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 11:08'
+const BUILD_TIMESTAMP = '2026-08-15 11:14'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -839,6 +839,14 @@ function speakCountToken(token: string, isBeat1: boolean, volume = 1.0) {
 
 
 
+
+
+function getVolumes(balance: number) {
+  const musicVol = 1.0 - 0.5 * balance
+  const clickVol = 0.5 + 0.5 * balance
+  return { musicVol, clickVol }
+}
+
 function App() {
   // Load initial persisted state synchronously from localStorage to avoid setting state in useEffect
   const persistedState = useMemo((): Partial<PersistedState> => {
@@ -1492,15 +1500,24 @@ function App() {
 
       const token = dancerCountInfo.activeLabel
       const isBeat1 = dancerCountInfo.activeIndex === 0
-      const vol = settings.audioCountVolume ?? 1.0
+      const balance = settings.audioCountVolume ?? 0.0
+      const { clickVol } = getVolumes(balance)
 
       if (settings.audioCountMode === 'voice') {
-        speakCountToken(token, isBeat1, vol)
+        speakCountToken(token, isBeat1, clickVol)
       } else if (settings.audioCountMode === 'metronome' || settings.audioCountMode === 'drum') {
-        playCountSound(settings.audioCountMode, token, isBeat1, vol)
+        playCountSound(settings.audioCountMode, token, isBeat1, clickVol)
       }
     }
   }, [isPlaying, currentTrack, dancerCountInfo, settings.audioCountMode, settings.audioCountVolume])
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+    const balance = settings.audioCountVolume ?? 0.0
+    const { musicVol } = getVolumes(balance)
+    audio.volume = musicVol
+  }, [settings.audioCountVolume, isPlaying])
 
   // Media Session API integration
   useEffect(() => {
@@ -3035,10 +3052,13 @@ function App() {
       URL.revokeObjectURL(activeObjectUrlRef.current)
     }
 
+    const balance = settingsRef.current.audioCountVolume ?? 0.0
+    const { musicVol } = getVolumes(balance)
+
     const objectUrl = URL.createObjectURL(file)
     activeObjectUrlRef.current = objectUrl
     audio.src = objectUrl
-    audio.volume = 1
+    audio.volume = musicVol
     audio.playbackRate = 1 + settingsRef.current.speedPct / 100
 
     audio.onloadedmetadata = () => {
@@ -3063,11 +3083,11 @@ function App() {
           if (!audio.paused) {
             if (audio.currentTime >= fadeWindow.fadeStart && audio.currentTime <= fadeWindow.end) {
               const remain = Math.max(0, fadeWindow.end - audio.currentTime)
-              audio.volume = Math.max(0, remain / fadeWindow.fade)
+              audio.volume = Math.max(0, remain / fadeWindow.fade) * musicVol
             }
             if (audio.currentTime >= fadeWindow.end) {
               audio.pause()
-              audio.volume = 1
+              audio.volume = musicVol
               const rule = sessionRuleRef.current
               if (rule.autoBreakEnabled) {
                 runBreakThenAdvance(index + 1, rule)
@@ -4148,33 +4168,38 @@ function App() {
                       <option value="metronome">⏱️ Metronome</option>
                       <option value="drum">🥁 Drum</option>
                     </select>
-                    {settings.audioCountMode && settings.audioCountMode !== 'muted' && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '6px' }}>
-                        <span style={{ fontSize: '0.65rem', color: '#8a9aa3' }}>Vol:</span>
-                        <input
-                          type="range"
-                          min="0"
-                          max="2"
-                          step="0.1"
-                          value={settings.audioCountVolume ?? 1.0}
-                          onChange={(e) => {
-                            const val = parseFloat(e.target.value)
-                            setSettings((prev) => ({
-                              ...prev,
-                              audioCountVolume: val
-                            }))
-                          }}
-                          style={{
-                            width: '75px',
-                            height: '3px',
-                            cursor: 'pointer',
-                            accentColor: '#ff7043',
-                            outline: 'none'
-                          }}
-                          title={`Volume: ${Math.round((settings.audioCountVolume ?? 1.0) * 100)}%`}
-                        />
-                      </div>
-                    )}
+                    {settings.audioCountMode && settings.audioCountMode !== 'muted' && (() => {
+                      const balance = settings.audioCountVolume ?? 0.0
+                      const musicPct = Math.round((1.0 - 0.5 * balance) * 100)
+                      const clickPct = Math.round((0.5 + 0.5 * balance) * 100)
+                      return (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: '6px' }}>
+                          <span style={{ fontSize: '0.65rem', color: '#8a9aa3' }}>Vol:</span>
+                          <input
+                            type="range"
+                            min="0"
+                            max="1"
+                            step="0.05"
+                            value={balance}
+                            onChange={(e) => {
+                              const val = parseFloat(e.target.value)
+                              setSettings((prev) => ({
+                                ...prev,
+                                audioCountVolume: val
+                              }))
+                            }}
+                            style={{
+                              width: '75px',
+                              height: '3px',
+                              cursor: 'pointer',
+                              accentColor: '#ff7043',
+                              outline: 'none'
+                            }}
+                            title={`Music: ${musicPct}% | Clicks: ${clickPct}%`}
+                          />
+                        </div>
+                      )
+                    })()}
                   </div>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flex: 1, justifyContent: 'flex-end', maxWidth: '200px' }}>
                     {dancerCountInfo.pattern.map((tok, idx) => {
