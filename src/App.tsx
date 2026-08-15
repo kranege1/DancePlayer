@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 07:37'
+const BUILD_TIMESTAMP = '2026-08-15 07:48'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -1688,18 +1688,22 @@ function App() {
       return
     }
 
-    setStatus('Checking for duplicate files...')
-    const fileHashes = await Promise.all(
-      accepted.map(async (file) => {
-        try {
-          const hash = await computeFileHash(file)
-          return { file, hash }
-        } catch (err) {
-          console.error('Failed to compute hash for file:', file.name, err)
-          return { file, hash: undefined }
-        }
-      })
-    )
+    setStatus(`Checking for duplicate files (0/${accepted.length})…`)
+    setImportProgress({ done: 0, total: accepted.length })
+
+    const fileHashes: Array<{ file: File; hash?: string }> = []
+    for (let i = 0; i < accepted.length; i++) {
+      const file = accepted[i]
+      setImportProgress({ done: i + 1, total: accepted.length })
+      setStatus(`Checking duplicates ${i + 1}/${accepted.length}: ${file.name}`)
+      try {
+        const hash = await computeFileHash(file)
+        fileHashes.push({ file, hash })
+      } catch (err) {
+        console.error('Failed to compute hash for file:', file.name, err)
+        fileHashes.push({ file, hash: undefined })
+      }
+    }
 
     const newFiles = fileHashes.filter(({ file, hash }) => {
       const isDuplicate = tracks.some((t) => {
@@ -1747,12 +1751,14 @@ function App() {
         })
       ).then(() => {
         if (!newFiles.length) {
+          setImportProgress(null)
           setStatus(`ℹ️ All ${duplicateFiles.length} file(s) are already in your library! Updated ratings for existing tracks.`)
         }
       })
     }
 
     if (!newFiles.length) {
+      setImportProgress(null)
       event.target.value = ''
       setStatus(`ℹ️ All ${accepted.length} file(s) are already in your library! Ratings were updated for existing tracks.`)
       return
@@ -1788,13 +1794,14 @@ function App() {
     }
 
     if (folderFiles.length > 0) {
-      setStatus(`📂 Scanning star ratings for ${folderFiles.length} tracks in detected dance folders…`)
+      setStatus(`📂 Scanning star ratings (0/${folderFiles.length})…`)
       setImportProgress({ done: 0, total: folderFiles.length })
 
       const scannedFiles: ScannedFolderFile[] = []
       for (let i = 0; i < folderFiles.length; i++) {
         const item = folderFiles[i]
         setImportProgress({ done: i + 1, total: folderFiles.length })
+        setStatus(`📂 Scanning ID3 ratings ${i + 1}/${folderFiles.length}: ${item.file.name}`)
         const rating = await extractFileStarRating(item.file)
         scannedFiles.push({
           file: item.file,
@@ -2698,8 +2705,26 @@ function App() {
             Local-first dance playback with smart breaks and pitch control.
           </p>
         </div>
-        <div className="status-row" style={{ width: '100%', margin: '8px 0 0' }}>
+        <div className="status-row" style={{ width: '100%', margin: '8px 0 0', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <span className="status-pill">{status}</span>
+          {importProgress && (
+            <div style={{ background: 'rgba(0,0,0,0.45)', padding: '10px 14px', borderRadius: '8px', border: '1px solid rgba(255,213,107,0.35)', boxShadow: '0 4px 12px rgba(0,0,0,0.3)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', color: '#ffd56b', marginBottom: '6px', fontWeight: 'bold' }}>
+                <span>Progress: {importProgress.done} / {importProgress.total} tracks</span>
+                <span>{Math.round((importProgress.done / importProgress.total) * 100)}%</span>
+              </div>
+              <div style={{ height: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: '4px', overflow: 'hidden' }}>
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${Math.round((importProgress.done / importProgress.total) * 100)}%`,
+                    background: 'linear-gradient(90deg, #ffd56b, #4ade80)',
+                    transition: 'width 0.15s ease-out'
+                  }}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </header>
 
