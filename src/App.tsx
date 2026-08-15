@@ -22,7 +22,7 @@ import danceShapeUrl from './DanceShape.png'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 07:36'
+const BUILD_TIMESTAMP = '2026-08-15 07:37'
 
 interface RemovedTrackRecord {
   hash?: string
