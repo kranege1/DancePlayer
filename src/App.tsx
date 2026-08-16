@@ -23,7 +23,7 @@ import { VOICE_ASSETS } from './voiceAssets'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-16 14:07'
+const BUILD_TIMESTAMP = '2026-08-16 14:13'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -1464,45 +1464,31 @@ function App() {
     // Reference interval based on the first two anchors
     const I_ref = Math.max(0.1, (anchors[1] - anchors[0]) + fineTuneOffset)
 
+    // Calculate global interval using first and last anchors
+    const tStart = anchors[0]
+    const tEnd = anchors[anchors.length - 1]
+    const span = tEnd - tStart
+    
+    // How many bars fit between start and end anchors based on our reference interval
+    const totalBars = Math.max(1, Math.round(span / I_ref))
+    const I_global = span > 0 ? (span / totalBars) : I_ref
+
     const list: number[] = []
 
-    // Add the first anchor
-    list.push(anchors[0])
-
-    // Interpolate between consecutive anchors
-    for (let i = 0; i < anchors.length - 1; i++) {
-      const tStart = anchors[i]
-      const tEnd = anchors[i + 1]
-      const diff = tEnd - tStart
-      const numBars = Math.max(1, Math.round(diff / I_ref))
-      const I_local = diff / numBars
-
-      for (let j = 1; j < numBars; j++) {
-        list.push(tStart + j * I_local)
-      }
-      list.push(tEnd)
+    // 1. Interpolate from first to last anchor using the global interval
+    for (let j = 0; j <= totalBars; j++) {
+      list.push(tStart + j * I_global)
     }
 
-    // Extrapolate backwards from anchors[0]
-    // Use the first segment's local interval for backward extrapolation
-    const diffFirst = anchors[1] - anchors[0]
-    const numBarsFirst = Math.max(1, Math.round(diffFirst / I_ref))
-    const I_start = diffFirst / numBarsFirst
-
-    let tPrev = anchors[0] - I_start
+    // 2. Extrapolate backwards from tStart
+    let tPrev = tStart - I_global
     while (tPrev >= 0) {
       list.unshift(tPrev)
-      tPrev -= I_start
+      tPrev -= I_global
     }
 
-    // Extrapolate forwards from last anchor
-    // Use the last segment's local interval for forward extrapolation
-    const k = anchors.length - 2
-    const diffLast = anchors[k + 1] - anchors[k]
-    const numBarsLast = Math.max(1, Math.round(diffLast / I_ref))
-    const I_end = diffLast / numBarsLast
-
-    let tNext = anchors[anchors.length - 1] + I_end
+    // 3. Extrapolate forwards from tEnd, adapting to peak if zoomWaveform exists
+    let tNext = tEnd + I_global
     while (tNext < dur) {
       let tClipped = tNext
       if (zoomWaveform && zoomWaveform.length > 0) {
@@ -1528,7 +1514,7 @@ function App() {
         }
       }
       list.push(tClipped)
-      tNext = tClipped + I_end
+      tNext = tClipped + I_global
     }
 
     return Array.from(new Set(list)).sort((a, b) => a - b)
