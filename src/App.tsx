@@ -23,7 +23,7 @@ import { VOICE_ASSETS } from './voiceAssets'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-15 18:17'
+const BUILD_TIMESTAMP = '2026-08-16 12:01'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -290,42 +290,7 @@ const DANCE_COUNT_PATTERNS: Record<DanceType, CountPattern[]> = {
         return 2
       }
     },
-    {
-      name: '1 2 3 4',
-      label: '1 2 3 4 (2 Bars)',
-      pattern: ['1', '2', '3', '4'],
-      weights: [1.0, 1.0, 1.0, 1.0],
-      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
-        const barInGroup = ((barIndex % 2) + 2) % 2
-        return barInGroup * 2 + (currentBeatNum - 1)
-      }
-    },
-    {
-      name: '1 2 3 4 5 6 7 8',
-      label: '1-8 (4 Bars)',
-      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
-      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
-        const barInGroup = ((barIndex % 4) + 4) % 4
-        return barInGroup * 2 + (currentBeatNum - 1)
-      }
-    },
-    {
-      name: '1 & 2 3 & 4',
-      label: '1 & 2 3 & 4',
-      pattern: ['1', '&', '2', '3', '&', '4'],
-      weights: [0.5, 0.5, 1.0, 0.5, 0.5, 1.0],
-      getActiveIndex: (barIndex, currentBeatNum, beatProgress) => {
-        const barInGroup = ((barIndex % 2) + 2) % 2
-        if (barInGroup === 0) {
-          if (currentBeatNum === 1) return beatProgress < 0.5 ? 0 : 1
-          return 2
-        } else {
-          if (currentBeatNum === 1) return beatProgress < 0.5 ? 3 : 4
-          return 5
-        }
-      }
-    }
+
   ],
   ChaCha: [
     {
@@ -347,16 +312,7 @@ const DANCE_COUNT_PATTERNS: Record<DanceType, CountPattern[]> = {
       weights: [1.0, 1.0, 1.0, 1.0],
       getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
     },
-    {
-      name: '1 2 3 4 5 6 7 8',
-      label: '1-8 (2 Bars)',
-      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
-      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
-        const barInGroup = ((barIndex % 2) + 2) % 2
-        return barInGroup * 4 + (currentBeatNum - 1)
-      }
-    }
+
   ],
   Rumba: [
     {
@@ -376,16 +332,7 @@ const DANCE_COUNT_PATTERNS: Record<DanceType, CountPattern[]> = {
       weights: [1.0, 1.0, 1.0, 1.0],
       getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
     },
-    {
-      name: '1 2 3 4 5 6 7 8',
-      label: '1-8 (2 Bars)',
-      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
-      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
-        const barInGroup = ((barIndex % 2) + 2) % 2
-        return barInGroup * 4 + (currentBeatNum - 1)
-      }
-    }
+
   ],
   'Paso Doble': [
     {
@@ -417,13 +364,6 @@ const DANCE_COUNT_PATTERNS: Record<DanceType, CountPattern[]> = {
   ],
   Jive: [
     {
-      name: '1 2 3 4',
-      label: '1 2 3 4',
-      pattern: ['1', '2', '3', '4'],
-      weights: [1.0, 1.0, 1.0, 1.0],
-      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
-    },
-    {
       name: '1 2 3 a 4 3 a 4',
       label: 'WDSF: 1 2 3 a 4 3 a 4',
       pattern: ['1', '2', '3', 'a', '4', '3', 'a', '4', '1', '2'],
@@ -444,34 +384,11 @@ const DANCE_COUNT_PATTERNS: Record<DanceType, CountPattern[]> = {
       }
     },
     {
-      name: '1 2 3 & 4 5 6 7 & 8',
-      label: '1 2 3 & 4 5 6 7 & 8',
-      pattern: ['1', '2', '3', '&', '4', '5', '6', '7', '&', '8'],
-      weights: [1.0, 1.0, 0.75, 0.25, 1.0, 1.0, 1.0, 0.75, 0.25, 1.0],
-      getActiveIndex: (barIndex, currentBeatNum, beatProgress) => {
-        const barInGroup = ((barIndex % 2) + 2) % 2
-        if (barInGroup === 0) {
-          if (currentBeatNum === 1) return 0
-          if (currentBeatNum === 2) return 1
-          if (currentBeatNum === 3) return beatProgress < 0.75 ? 2 : 3
-          return 4
-        } else {
-          if (currentBeatNum === 1) return 5
-          if (currentBeatNum === 2) return 6
-          if (currentBeatNum === 3) return beatProgress < 0.75 ? 7 : 8
-          return 9
-        }
-      }
-    },
-    {
-      name: '1 2 3 4 5 6 7 8',
-      label: '1-8 (2 Bars)',
-      pattern: ['1', '2', '3', '4', '5', '6', '7', '8'],
-      weights: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
-      getActiveIndex: (barIndex, currentBeatNum, _beatProgress) => {
-        const barInGroup = ((barIndex % 2) + 2) % 2
-        return barInGroup * 4 + (currentBeatNum - 1)
-      }
+      name: '1 2 3 4',
+      label: '1 2 3 4',
+      pattern: ['1', '2', '3', '4'],
+      weights: [1.0, 1.0, 1.0, 1.0],
+      getActiveIndex: (_barIndex, currentBeatNum, _beatProgress) => currentBeatNum - 1
     }
   ],
   Tango: [
@@ -1587,12 +1504,66 @@ function App() {
 
     let tNext = anchors[anchors.length - 1] + I_end
     while (tNext < dur) {
-      list.push(tNext)
-      tNext += I_end
+      let tClipped = tNext
+      if (zoomWaveform && zoomWaveform.length > 0) {
+        const w_sec = 0.2 // peak search window size in seconds
+        const tStartSearch = Math.max(0, tNext - w_sec)
+        const tEndSearch = Math.min(dur, tNext + w_sec)
+        
+        const idxStart = Math.floor((tStartSearch / dur) * (zoomWaveform.length - 1))
+        const idxEnd = Math.ceil((tEndSearch / dur) * (zoomWaveform.length - 1))
+        
+        let maxVal = -1
+        let maxIdx = -1
+        for (let idx = idxStart; idx <= idxEnd; idx++) {
+          if (idx >= 0 && idx < zoomWaveform.length) {
+            if (zoomWaveform[idx] > maxVal) {
+              maxVal = zoomWaveform[idx]
+              maxIdx = idx
+            }
+          }
+        }
+        if (maxIdx !== -1) {
+          tClipped = (maxIdx / (zoomWaveform.length - 1)) * dur
+        }
+      }
+      list.push(tClipped)
+      tNext = tClipped + I_end
     }
 
     return Array.from(new Set(list)).sort((a, b) => a - b)
-  }, [currentTrack, mainDuration])
+  }, [currentTrack, mainDuration, zoomWaveform])
+
+  const clippedBeat1TimesSet = useMemo(() => {
+    if (!currentTrack || beat1Times.length === 0) {
+      return new Set<number>()
+    }
+    let anchors: number[] = []
+    if (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0) {
+      anchors = [...currentTrack.tappedBeat1s].sort((a, b) => a - b)
+    } else if (currentTrack.beatPairs && currentTrack.beatPairs.length > 0) {
+      const sortedPairs = [...currentTrack.beatPairs].sort((a, b) => a.t1 - b.t1)
+      const firstPair = sortedPairs[0]
+      anchors = [firstPair.t1, firstPair.t2]
+      if (currentTrack.lateBeatSec !== undefined) {
+        anchors.push(currentTrack.lateBeatSec)
+      }
+      anchors.sort((a, b) => a - b)
+    }
+
+    if (anchors.length < 2) {
+      return new Set<number>()
+    }
+
+    const lastAnchor = anchors[anchors.length - 1]
+    const clippedSet = new Set<number>()
+    beat1Times.forEach((t) => {
+      if (t > lastAnchor) {
+        clippedSet.add(t)
+      }
+    })
+    return clippedSet
+  }, [currentTrack, beat1Times])
 
   const currentBeatNum = useMemo(() => {
     if (!currentTrack || beat1Times.length === 0) {
@@ -2105,9 +2076,16 @@ function App() {
                       pair => Math.abs(barStart - pair.t1) < 0.5 || Math.abs(barStart - pair.t2) < 0.5
                     ) || (currentTrack.lateBeatSec !== undefined && Math.abs(barStart - currentTrack.lateBeatSec) < 0.5)))
 
+                  const isClipped = Array.from(clippedBeat1TimesSet).some(t => Math.abs(barStart - t) < 0.05)
+
                   if (isBeat1) {
-                    ctx.strokeStyle = isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.4)'
-                    ctx.lineWidth = isRegistered ? 2 : 1
+                    if (isClipped) {
+                      ctx.strokeStyle = '#ff4444'
+                      ctx.lineWidth = 2
+                    } else {
+                      ctx.strokeStyle = isRegistered ? '#ffd56b' : 'rgba(255, 255, 255, 0.4)'
+                      ctx.lineWidth = isRegistered ? 2 : 1
+                    }
                   } else {
                     ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)'
                     ctx.lineWidth = 0.5
@@ -2119,7 +2097,7 @@ function App() {
                   ctx.stroke()
 
                   ctx.fillStyle = isBeat1
-                    ? (isRegistered ? '#ffd56b' : '#a0b2bd')
+                    ? (isClipped ? '#ff4444' : (isRegistered ? '#ffd56b' : '#a0b2bd'))
                     : 'rgba(160, 178, 189, 0.6)'
                   ctx.font = isBeat1 ? 'bold 10px sans-serif' : '9px sans-serif'
                   ctx.fillText(isBeat1 ? `Beat 1` : sub.label, x + 4, 15)
@@ -2161,7 +2139,7 @@ function App() {
         zoomAnimationFrameRef.current = null
       }
     }
-  }, [currentTrack, beat1Times, zoomBarsCount, mainCurrentTime, mainDuration, zoomWaveform])
+  }, [currentTrack, beat1Times, clippedBeat1TimesSet, zoomBarsCount, mainCurrentTime, mainDuration, zoomWaveform])
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return
