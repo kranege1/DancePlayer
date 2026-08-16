@@ -23,7 +23,7 @@ import { VOICE_ASSETS } from './voiceAssets'
 
 const STORAGE_KEY = 'danceplayer-metadata-v1'
 const REMOVED_TRACKS_KEY = 'danceplayer-removed-tracks-v1'
-const BUILD_TIMESTAMP = '2026-08-16 12:01'
+const BUILD_TIMESTAMP = '2026-08-16 14:07'
 
 interface RemovedTrackRecord {
   hash?: string
@@ -4530,30 +4530,31 @@ function App() {
                           <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${fullPct}%`, background: '#4cd8b0', borderRadius: '4px' }} />
                           <div className="cue-marker cue-marker-start" style={{ position: 'absolute', left: `${cuePos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px', zIndex: 5 }} title={`Cue: ${fmtSec(cueStart)}`} />
                           <div className="cue-marker cue-marker-end" style={{ position: 'absolute', left: `${endPos}%`, background: '#fff', width: '2px', height: '12px', top: '-2px', zIndex: 5 }} title={`End: ${fmtSec(limitTime)}`} />
-                          {beat1Times.map((time, idx) => {
-                            const pct = (time / dur) * 100
-                            const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
-                              ? currentTrack.tappedBeat1s.some(t => Math.abs(time - t) < 0.1)
-                              : ((currentTrack.beatPairs?.some(
-                                pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
-                              ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
-                            if (!isRegistered) return null
-                            return (
-                              <div
-                                key={`beat1-${idx}`}
-                                style={{
-                                  position: 'absolute',
-                                  left: `${pct}%`,
-                                  bottom: 0,
-                                  height: '8px',
-                                  width: '1px',
-                                  background: '#ffd56b',
-                                  zIndex: 4
-                                }}
-                                title={`Beat 1: ${fmtSec(time)} (Registered Click)`}
-                              />
-                            )
-                          })}
+                           {beat1Times.map((time, idx) => {
+                             const pct = (time / dur) * 100
+                             const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
+                               ? currentTrack.tappedBeat1s.some(t => Math.abs(time - t) < 0.1)
+                               : ((currentTrack.beatPairs?.some(
+                                 pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
+                               ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
+                             const isClipped = Array.from(clippedBeat1TimesSet).some(t => Math.abs(time - t) < 0.05)
+                             if (!isRegistered && !isClipped) return null
+                             return (
+                               <div
+                                 key={`beat1-${idx}`}
+                                 style={{
+                                   position: 'absolute',
+                                   left: `${pct}%`,
+                                   bottom: 0,
+                                   height: '8px',
+                                   width: '1px',
+                                   background: isClipped ? '#ff4444' : '#ffd56b',
+                                   zIndex: 4
+                                 }}
+                                 title={isClipped ? `Beat 1: ${fmtSec(time)} (Clipped Peak)` : `Beat 1: ${fmtSec(time)} (Registered Click)`}
+                               />
+                             )
+                           })}
                         </div>
                         <input
                           type="range"
@@ -4619,30 +4620,31 @@ function App() {
                       <div className="cue-bar-container">
                         <div className="cue-bar" style={{ background: 'rgba(255,255,255,0.15)', height: '8px', borderRadius: '4px', position: 'relative', width: '100%' }}>
                           <div className="cue-bar-progress" style={{ position: 'absolute', height: '100%', left: 0, width: `${pct}%`, background: '#4cd8b0', borderRadius: '4px' }} />
-                          {beat1Times.map((time, idx) => {
-                            const markerPct = (time / dur) * 100
-                            const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
-                              ? currentTrack.tappedBeat1s.some(t => Math.abs(time - t) < 0.1)
-                              : ((currentTrack.beatPairs?.some(
-                                pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
-                              ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
-                            if (!isRegistered) return null
-                            return (
-                              <div
-                                key={`beat1-${idx}`}
-                                style={{
-                                  position: 'absolute',
-                                  left: `${markerPct}%`,
-                                  bottom: 0,
-                                  height: '8px',
-                                  width: '1px',
-                                  background: '#ffd56b',
-                                  zIndex: 4
-                                }}
-                                title={`Beat 1: ${fmtSec(time)} (Registered Click)`}
-                              />
-                            )
-                          })}
+                           {beat1Times.map((time, idx) => {
+                             const markerPct = (time / dur) * 100
+                             const isRegistered = (currentTrack.tappedBeat1s && currentTrack.tappedBeat1s.length > 0)
+                               ? currentTrack.tappedBeat1s.some(t => Math.abs(time - t) < 0.1)
+                               : ((currentTrack.beatPairs?.some(
+                                 pair => Math.abs(time - pair.t1) < 0.5 || Math.abs(time - pair.t2) < 0.5
+                               ) || (currentTrack.lateBeatSec !== undefined && Math.abs(time - currentTrack.lateBeatSec) < 0.5)))
+                             const isClipped = Array.from(clippedBeat1TimesSet).some(t => Math.abs(time - t) < 0.05)
+                             if (!isRegistered && !isClipped) return null
+                             return (
+                               <div
+                                 key={`beat1-${idx}`}
+                                 style={{
+                                   position: 'absolute',
+                                   left: `${markerPct}%`,
+                                   bottom: 0,
+                                   height: '8px',
+                                   width: '1px',
+                                   background: isClipped ? '#ff4444' : '#ffd56b',
+                                   zIndex: 4
+                                 }}
+                                 title={isClipped ? `Beat 1: ${fmtSec(time)} (Clipped Peak)` : `Beat 1: ${fmtSec(time)} (Registered Click)`}
+                               />
+                             )
+                           })}
                         </div>
                         <input
                           type="range"
